@@ -1,0 +1,19 @@
+# VoxCPM2 (OpenBMB) on GB10 (aarch64 / CUDA 13 / Python 3.12)
+#
+# 官方 voxcpm 套件會自己把相依全部拉齊（transformers / funasr / modelscope /
+# torchcodec / datasets / gradio ...），所以這裡只釘版本，不重列。
+#
+# 注意事項：
+#   torchcodec  → voxcpm 的硬相依，需要系統的 FFmpeg 動態函式庫，
+#                 Dockerfile 裡的 apt ffmpeg 就是為了它。有 aarch64 wheel。
+#   gradio      → voxcpm 把它列成必要相依（它自帶 web demo），拿不掉，
+#                 但我們不啟動它，只是佔一點 image 空間。
+#   denoiser    → from_pretrained(load_denoiser=False)，不然啟動時會去 ModelScope
+#                 抓 ZipEnhancer，離線環境會卡住。
+#   torch/torchaudio → 在 Dockerfile 用 cu130 index 另外裝。
+voxcpm==2.0.3
+
+# --- engine HTTP server
+fastapi==0.115.6
+uvicorn[standard]==0.30.0
+pydantic==2.9.2

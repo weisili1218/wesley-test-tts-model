@@ -1,0 +1,57 @@
+# Fun-CosyVoice3-0.5B-2512 on GB10 (aarch64 / CUDA 13 / Python 3.12)
+#
+# 這份是從官方 CosyVoice requirements.txt 改寫來的。跟官方的差異與原因：
+#
+#   torch / torchaudio     → 官方釘 2.3.1+cu121，沒有能跑 sm_121 的 aarch64 build。
+#                            改在 Dockerfile 用 cu130 index 裝 2.11.0。
+#   onnxruntime-gpu        → PyPI 沒有 aarch64 wheel。改用 CPU 版；ONNX 只跑
+#                            speech tokenizer 跟 campplus（都是短音檔），CPU 夠用。
+#   deepspeed              → 只有 cosyvoice/utils/train_utils.py 用到（訓練用），
+#                            推論路徑完全沒 import。
+#   tensorrt-cu12          → 只有 load_trt=True 才需要，而且是 cu12。我們不開 TRT。
+#   gradio                 → 只有 demo 用得到，拿掉省時間跟相依衝突。
+#   modelscope             → 我們用 huggingface_hub 下載，不需要它。
+#   ttsfrd                 → 只有 x86_64 wheel。frontend.py 有 try/except，
+#                            import 失敗會自動 fallback 到 wetext。
+#
+# 特別說明 wetext：官方新版已經從 WeTextProcessing(pynini) 換成 wetext(kaldifst)，
+# kaldifst 有現成的 aarch64 wheel，所以這版**不再需要 micromamba/conda**。
+
+# --- 數值：numba(openai-whisper 的相依) 目前只吃到 numpy<2.6，這裡釘 1.x 最穩
+numpy==1.26.4
+scipy==1.13.1
+
+# --- 模型 / 推論
+conformer==0.3.2
+diffusers==0.29.0
+einops==0.8.0
+x-transformers==2.11.24
+transformers==4.51.3
+openai-whisper==20250625
+tiktoken
+onnxruntime==1.23.2
+onnx==1.16.0
+
+# --- 設定 / 工具
+hydra-core==1.3.2
+HyperPyYAML==1.2.3
+omegaconf==2.3.0
+lightning==2.2.4
+networkx==3.1
+matplotlib==3.7.5
+rich==13.7.1
+inflect==7.3.1
+protobuf==4.25.3
+
+# --- 音訊
+librosa==0.10.2
+soundfile==0.12.1
+pyworld==0.3.4
+
+# --- 中文文字正規化（取代 pynini/WeTextProcessing）
+wetext==0.1.6
+
+# --- engine HTTP server
+fastapi==0.115.6
+uvicorn[standard]==0.30.0
+pydantic==2.9.2

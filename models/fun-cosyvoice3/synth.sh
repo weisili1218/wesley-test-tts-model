@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# 單句合成。底下就是打這一包 gateway 的 /v1/audio/speech。
+#
+#   ./synth.sh "要合成的文字" [音色] [輸出檔名]
+#
+# 這一包只有 fun-cosyvoice3 一顆引擎，所以不用（也不能）指定引擎 —— 舊版那個
+# 第三個「引擎」參數在這裡變成輸出檔名了。
+#
+# 例：
+#   ./synth.sh "今天天氣真好。"                        用最近建立的音色
+#   ./synth.sh "今天天氣真好。" 小美                   指定音色
+#   ./synth.sh "今天天氣真好。" 小美 out-001.wav       指定音色與輸出檔名
+#
+# Fun-CosyVoice3 沒有內建音色，音色庫是空的時候會拿到 400。先 ./voice.sh add 建一個。
+#
+# 輸出一律落在 work/results/。要打別台機器就設 TTS_GATEWAY。
+set -euo pipefail
+
+TEXT="${1:?請給要合成的文字}"
+VOICE="${2:-}"
+OUT="${3:-output.wav}"
+
+BASE="${TTS_GATEWAY:-http://localhost:8002}"
+# 陣列刻意不留空：set -u 底下展開空陣列在舊版 bash 會報 unbound variable
+AUTH=(-H "X-Client: tts-scripts")
+[ -n "${TTS_API_KEY:-}" ] && AUTH+=(-H "Authorization: Bearer ${TTS_API_KEY}")
+
+mkdir -p work/results
+
+BODY=$(python3 - "$TEXT" "$VOICE" <<'PY'
+import json, sys
+text, voice = sys.argv[1], sys.argv[2]
+body = {"input": text, "model": "fun-cosyvoice3", "response_format": "wav"}
+if voice:
+    body["voice"] = voice
+print(json.dumps(body, ensure_ascii=False))
+PY
+)
+
+HTTP=$(curl -sS "${AUTH[@]}" -X POST "$BASE/v1/audio/speech" \
+  -H 'Content-Type: application/json' -d "$BODY" \
+  --output "work/results/$OUT" --write-out '%{http_code}')
+
+if [ "$HTTP" != "200" ]; then
+  echo "合成失敗（HTTP ${HTTP}）：" >&2
+  cat "work/results/$OUT" >&2; echo >&2
+  rm -f "work/results/$OUT"
+  exit 1
+fi
+
+echo "完成： work/results/$OUT"

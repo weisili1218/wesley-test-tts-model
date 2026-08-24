@@ -1,0 +1,20 @@
+# Qwen3-TTS-12Hz-1.7B-CustomVoice on GB10 (aarch64 / CUDA 13 / Python 3.12)
+#
+# 這顆跟其他三顆最大的差別：官方 qwen-tts 套件**硬性釘死 transformers==4.57.3**，
+# 而 CosyVoice 那條線需要 4.51.3。這就是為什麼四個引擎必須是四個獨立 image，
+# 沒辦法塞在同一個 venv 裡。
+#
+# 沒裝的東西與原因：
+#   flash-attn  → README 建議用 FlashAttention 2，但它在 aarch64 + Blackwell(sm_121)
+#                 上要現場編譯，非常久而且常失敗。改用 PyTorch 內建的 sdpa，
+#                 速度差一點但穩定（server.py 的 QWEN_ATTN 可以改回 flash_attention_2）。
+#   torch/torchaudio → 在 Dockerfile 用 cu130 index 另外裝。
+#
+# qwen-tts 會自己把 transformers / accelerate / gradio / librosa / soundfile /
+# sox / onnxruntime / einops 拉進來，所以這裡只列它沒有涵蓋的。
+qwen-tts==0.1.1
+
+# --- engine HTTP server
+fastapi==0.115.6
+uvicorn[standard]==0.30.0
+pydantic==2.9.2

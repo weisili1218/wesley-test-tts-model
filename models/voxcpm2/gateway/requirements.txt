@@ -1,0 +1,8 @@
+# Gateway 不載模型、不碰 GPU，所以相依很輕。
+# 音檔的格式轉換（任意輸入 → 16k 單聲道 wav、wav → mp3/flac/opus）
+# 一律交給 ffmpeg 執行檔做，不在 Python 端裝 librosa/soundfile 那一大包。
+fastapi==0.115.6
+uvicorn[standard]==0.30.0
+pydantic==2.9.2
+httpx==0.27.2
+python-multipart==0.0.9
