@@ -4,13 +4,14 @@
 #   docker compose up -d
 #   curl -X POST http://localhost:18003/v1/warmup     # 先把模型載進 GPU
 #
-# 四包裡唯一開箱即用的：內建 9 個精選音色，不用準備參考音檔。
-#   ./voice.sh list                          看有哪些內建音色
-#   ./synth.sh "今天天氣真好。" Vivian        直接合成
+# 掛的是 Base checkpoint：上傳一段參考音檔克隆音色，跟另外三包一樣。
+#   ./voice.sh add "<名稱>" ~/ref.wav "<逐字稿>"   先建一個音色，回應裡的 voice.id 記下來
+#   ./synth.sh "今天天氣真好。" "$VOICE_ID"        再拿那個 id 來合成
 #
-# CustomVoice checkpoint 不做上傳克隆。真的要克隆的話，把 engine/Dockerfile 的
-# MODEL_REPO 換成 Qwen/Qwen3-TTS-12Hz-1.7B-Base，並在下面的 engine 加
-# environment: ENGINE_MODES: "preset,clone"，然後重 build。
+# ⚠ 這包沒有內建音色 —— 音色庫空的時候合成會回 400，一定要先 add。
+# 想要「開箱即用的 9 個精選音色」就把 engine/Dockerfile 的 MODEL_REPO 換回
+# Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice、ENGINE_MODES 改成 preset，然後重 build。
+# 兩個 checkpoint 只能二選一，Base 沒有 preset、CustomVoice 不會克隆。
 #
 # port：gateway 18003 對外，引擎 18083 只給除錯。四包的 port 都錯開，
 # 可以同時起來（記憶體夠的話）。

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # 音色庫的操作包裝，底下就是打這一包 gateway 的 /v1/voices。
 #
-#   ./voice.sh list                                 列出 9 個內建音色
+#   ./voice.sh list                                 列出所有音色
+#   ./voice.sh add <名稱> <音檔> [逐字稿]            上傳參考音檔建立克隆音色
 #   ./voice.sh show <voice_id>                      看單一音色
+#   ./voice.sh transcript <voice_id> "<逐字稿>"     事後補逐字稿
 #   ./voice.sh preview <voice_id> [試聽文字]        試聽，存成 work/results/preview.wav
+#   ./voice.sh rm <voice_id>                        刪除
 #
-# Qwen3-TTS 的 CustomVoice checkpoint 只有內建音色（preset，唯讀），不能上傳克隆、
-# 也不能用文字描述造音色，所以沒有 add / design / transcript / rm 這幾條。
-# 真的要克隆的話，把 engine/Dockerfile 的 MODEL_REPO 換成
-# Qwen/Qwen3-TTS-12Hz-1.7B-Base、ENGINE_MODES 改成 preset,clone 重 build，
-# 再從別包把 add 那段複製過來。
+# 這一包掛的是 Qwen3-TTS-12Hz-1.7B-Base：純克隆，沒有內建音色，所以第一件事一定是
+# add 一個。音檔可以是任意格式（wav/mp3/m4a/flac...），gateway 會用 ffmpeg 轉成
+# 16k 單聲道。長度建議 5-15 秒，短於 2 秒會被擋掉。
+# 逐字稿請盡量給 —— Qwen 的 generate_voice_clone 會拿它去對齊參考音檔，不給相似度會掉。
 #
 # 這一包只有 qwen3-tts 一顆引擎，所以指令裡不用指定引擎（舊版 preview 的
 # 「引擎」參數在這裡拿掉了，第二個參數直接是試聽文字）。
@@ -31,8 +33,24 @@ case "$cmd" in
   list)
     curl -sS "${AUTH[@]}" "$BASE/v1/voices" | pretty
     ;;
+  add)
+    NAME="${1:?用法： ./voice.sh add <名稱> <音檔> [逐字稿]}"
+    FILE="${2:?請給參考音檔路徑}"
+    TEXT="${3:-}"
+    [ -f "$FILE" ] || { echo "找不到檔案：$FILE" >&2; exit 1; }
+    [ -z "$TEXT" ] && echo "提醒：沒給逐字稿，音色相似度會下降。之後可以用 ./voice.sh transcript 補。" >&2
+    curl -sS "${AUTH[@]}" -X POST "$BASE/v1/voices" \
+      -F "name=$NAME" -F "file=@$FILE" -F "transcript=$TEXT" | pretty
+    ;;
   show)
     curl -sS "${AUTH[@]}" "$BASE/v1/voices/${1:?請給 voice_id}" | pretty
+    ;;
+  transcript)
+    ID="${1:?請給 voice_id}"; TEXT="${2:?請給逐字稿}"
+    curl -sS "${AUTH[@]}" -X PATCH "$BASE/v1/voices/$ID" \
+      -H 'Content-Type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"transcript":sys.argv[1]}))' "$TEXT")" \
+      | pretty
     ;;
   preview)
     ID="${1:?請給 voice_id}"; TXT="${2:-}"
@@ -48,8 +66,11 @@ print("?" + urllib.parse.urlencode({"text": sys.argv[1]}) if sys.argv[1] else ""
     fi
     echo "完成： work/results/preview.wav"
     ;;
+  rm)
+    curl -sS "${AUTH[@]}" -X DELETE "$BASE/v1/voices/${1:?請給 voice_id}" | pretty
+    ;;
   *)
-    sed -n '2,11p' "$0"
+    sed -n '2,12p' "$0"
     exit 1
     ;;
 esac

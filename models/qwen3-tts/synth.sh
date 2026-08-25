@@ -7,11 +7,15 @@
 # 第三個「引擎」參數在這裡變成輸出檔名了。
 #
 # 例：
-#   ./synth.sh "今天天氣真好。"                        用預設內建音色（Vivian）
-#   ./synth.sh "今天天氣真好。" Ethan                  換一個內建音色
-#   ./synth.sh "今天天氣真好。" Vivian out-001.wav     指定音色與輸出檔名
+#   ./synth.sh "今天天氣真好。"                              用最近建立的克隆音色
+#   ./synth.sh "今天天氣真好。" "$VOICE_ID"                   指定音色
+#   ./synth.sh "今天天氣真好。" "$VOICE_ID" out-001.wav       指定音色與輸出檔名
 #
-# 這顆開箱即用，不用先建音色。./voice.sh list 看有哪 9 個內建音色。
+# 第二個參數是 POST /v1/voices 回傳的 voice.id（voice_xxxxxxxxxxxx）。填 add 當初給的
+# 名稱也行，但撞名會回 400 叫你改用 id —— 自動化腳本一律用 id。./voice.sh list 可以查。
+#
+# 這顆掛的是 Base checkpoint，沒有內建音色 —— 音色庫空的時候會回 400。
+# 先 ./voice.sh add "<名稱>" <音檔> "<逐字稿>" 建一個，再回來合成。
 #
 # 輸出一律落在 work/results/。要打別台機器就設 TTS_GATEWAY。
 set -euo pipefail

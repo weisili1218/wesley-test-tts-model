@@ -12,20 +12,24 @@ CSV 欄位（第一列是標題，順序不拘，缺的欄位用預設值）：
 
     text        必填，要合成的文字
     output      必填，輸出檔名（不用寫副檔名，會自己補）
-    voice       音色：內建 speaker 名稱，例如 Vivian（./voice.sh list 看全部）
-    instruct    語氣指示，例如「用開心一點的語氣說」
+    voice       音色 id —— POST /v1/voices 建音色時回傳的 voice.id
+                （voice_xxxxxxxxxxxx，./voice.sh list 可以查回來）。
+                留空就用最近建立的克隆音色，整批同一個聲音時這樣最省事。
+    instruct    語氣指示。這一包掛的是 Qwen3-TTS Base，克隆路徑吃不到這個欄位，
+                填了不會有作用；欄位留著只是為了跟另外三包的 CSV 格式一致。
 
-範例：
+範例（第三列指定音色，前兩列用預設）：
 
     text,output,voice,instruct
-    歡迎收聽本集節目，我是主持人。,out-001,Vivian,用開朗一點的語氣說
-    下週三下午三點開會，請準時參加。,out-002,Ethan,
+    歡迎收聽本集節目，我是主持人。,out-001,,
+    下週三下午三點開會，請準時參加。,out-002,,
+    今天天氣真好，適合出門走走。,out-003,voice_a1b2c3d4e5f6,
 
 用法：
 
     python3 scripts/batch.py work/data/batch.csv
     python3 scripts/batch.py work/data/batch.csv --format mp3
-    python3 scripts/batch.py work/data/batch.csv --voice Vivian
+    python3 scripts/batch.py work/data/batch.csv --voice "$VOICE_ID"   # 整批蓋成同一個
 
 已經存在的輸出檔會跳過，重跑不會重做；要重新產生就先刪掉舊檔（或加 --overwrite）。
 """

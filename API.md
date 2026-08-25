@@ -15,7 +15,7 @@
 |---|---|---|---|---|
 | cosyvoice2 | 18001 | 18081 | `cosyvoice2` | `clone` |
 | fun-cosyvoice3 | 18002 | 18082 | `fun-cosyvoice3` | `clone` |
-| qwen3-tts | 18003 | 18083 | `qwen3-tts` | `preset` |
+| qwen3-tts | 18003 | 18083 | `qwen3-tts` | `clone` |
 | voxcpm2 | 18004 | 18084 | `voxcpm2` | `clone` / `design` / `default` |
 
 > 路由四包都有（同一份 app.py），引擎沒能力的那幾條會回 **400 + 人看得懂的原因**，
@@ -104,9 +104,9 @@ Body 是 JSON，回 **audio binary**（不是 JSON）。
 
 **沒給 `voice` 時 gateway 怎麼挑**（`_default_voice_for`）：
 
-1. 引擎有內建 preset → 用第一個（qwen3-tts 走這條，預設 `Vivian`）
+1. 引擎有內建 preset → 用第一個（目前四包都沒有 preset，這條走不到）
 2. 引擎支援 `default` mode → 讓模型自己生一個音色（voxcpm2 走這條）
-3. 否則挑**最近建立的 clone 音色**（CosyVoice 兩顆走這條）
+3. 否則挑**最近建立的 clone 音色**（CosyVoice 兩顆 + qwen3-tts 走這條）
 4. 都沒有 → **400**，要你先 `POST /v1/voices` 上傳參考音檔
 
 ```bash
@@ -124,9 +124,9 @@ curl -X POST http://localhost:18002/v1/audio/speech \
 
 | type | 怎麼來的 | 哪幾包能用 | 可改可刪 |
 |---|---|---|---|
-| `clone` | 上傳參考音檔 | cosyvoice2 / fun-cosyvoice3 / voxcpm2 | ✅ |
+| `clone` | 上傳參考音檔 | 四包都可以 | ✅ |
 | `design` | 純文字描述，不用音檔 | voxcpm2 | ✅ |
-| `preset` | 模型內建 | qwen3-tts（9 個 speaker） | ❌ 唯讀 |
+| `preset` | 模型內建 | 目前沒有（qwen3-tts 換成 Base checkpoint 後就沒有內建音色了）| ❌ 唯讀 |
 
 自建音色存在 `work/voices/`：`voices.json` 是索引，`<voice_id>.wav` 是正規化後的參考音檔。整個資料夾複製走就能搬機器，也可以複製給另外三包用。
 
@@ -179,7 +179,7 @@ query：`?type=clone|design|preset`、`?engine=<name>`（過濾 `compatible_engi
   "has_audio": true, "compatible_engines": ["voxcpm2"]}]}
 ```
 
-> **preset 音色要 warmup 之後才看得到。** 引擎的內建 speaker 清單是模型載入時才填的，容器剛起來時 `/health` 的 `presets` 是空的。而 gateway 對引擎能力有 **300 秒快取**，所以冷啟動後太早打會看到空清單、而且會空 5 分鐘。先 `POST /v1/warmup`（它會順手清快取）。
+> **preset 音色要 warmup 之後才看得到**（目前四包都沒有 preset，這段留給換回 CustomVoice 時參考）。引擎的內建 speaker 清單是模型載入時才填的，容器剛起來時 `/health` 的 `presets` 是空的。而 gateway 對引擎能力有 **300 秒快取**，所以冷啟動後太早打會看到空清單、而且會空 5 分鐘。先 `POST /v1/warmup`（它會順手清快取）。
 
 #### `GET /v1/voices/{id}` / `PATCH` / `DELETE`
 
@@ -200,7 +200,7 @@ query：`?type=clone|design|preset`、`?engine=<name>`（過濾 `compatible_engi
 1. 完全符合的 **voice id**（`voice_xxx` / `design_xxx`）
 2. `preset_<engine>_<speaker>` 格式
 3. **自建音色的名稱**。撞名（兩個以上）→ **400**，叫你改用 id
-4. 直接給 **preset speaker 名稱**，例如 `"Vivian"`
+4. 直接給 **preset speaker 名稱**，例如 `"Vivian"`（目前四包都沒有 preset，這條走不到）
 5. 都找不到 → **404**
 
 ---
@@ -213,7 +213,7 @@ query：`?type=clone|design|preset`、`?engine=<name>`（過濾 `compatible_engi
 |---|---|---|---|
 | `speed` | ✅ 傳進 inference | ❌ 忽略 | ❌ 忽略 |
 | `language` | ❌ 忽略 | ✅ 用；不給則 `Auto` 自動判斷 | ❌ 忽略 |
-| `instructions` | ✅ 走 `inference_instruct2`（**會蓋掉 zero-shot 路徑**） | ✅ 當 `instruct` 傳入 | ✅ 併成文字最前面的括號 prefix |
+| `instructions` | ✅ 走 `inference_instruct2`（**會蓋掉 zero-shot 路徑**） | ❌ 忽略（`generate_voice_clone` 沒這個參數）| ✅ 併成文字最前面的括號 prefix |
 | 音色 `description` | 與 `instructions` 合併成同一段風格文字 | 同左 | 同左（併進 prefix） |
 | `response_format` | gateway 統一用 ffmpeg 轉，四包一致 | 同左 | 同左 |
 
@@ -267,7 +267,7 @@ text, mode, ref_audio_path, ref_text, description, instruct, speaker, language, 
 
 沒有 `ref_audio_path` 一律 400：這是 zero-shot 克隆模型，每條路徑都要參考音檔。
 
-**qwen3-tts**：`mode=preset` → `generate_custom_voice`；`mode=clone` → 試 `generate_voice_clone`，**CustomVoice checkpoint 通常會失敗並回 400**，訊息會叫你改用另外三顆、或改掛 `Qwen3-TTS-12Hz-1.7B-Base` 重 build。speaker 不在支援清單 → 400 並列出可用的。
+**qwen3-tts**：目前掛 `Qwen3-TTS-12Hz-1.7B-Base`，`mode=clone` → `generate_voice_clone(ref_audio, ref_text)`。沒有 `ref_audio_path` 回 400。`ref_text`（逐字稿）不是必填但**強烈建議**，模型拿它去對齊參考音檔。`mode=preset` → 400，Base 沒有內建 speaker（那是 CustomVoice checkpoint 才有的，見該包 DEPLOY.md 的「換模型」）。
 
 **voxcpm2**：`clone` 給了 `ref_text` 會**同一段音檔同時當 reference 跟 prompt**，升級成 ultimate cloning（相似度最高）；`design` 把描述包成 `(描述)文字` 的 prefix；`default` 什麼都不加。
 
@@ -277,12 +277,13 @@ text, mode, ref_audio_path, ref_text, description, instruct, speaker, language, 
 |---|---|
 | 共通 | `ENGINE_NAME`、`MODEL_PATH`、`ENGINE_MODES` |
 | cosyvoice ×2 | `COSYVOICE_CLASS`（`CosyVoice2`/`CosyVoice3`）、`COSYVOICE_FP16` |
-| qwen3-tts | `QWEN_ATTN`（預設 `sdpa`，aarch64 上唯一免現場編譯的）、`QWEN_DTYPE`、`QWEN_DEFAULT_SPEAKER` |
+| qwen3-tts | `QWEN_ATTN`（預設 `sdpa`，aarch64 上唯一免現場編譯的）、`QWEN_DTYPE`、`QWEN_DEFAULT_SPEAKER`（只有 CustomVoice checkpoint 用得到）|
 | voxcpm2 | `VOXCPM_OPTIMIZE`（torch.compile，預設關）、`VOXCPM_CFG`、`VOXCPM_TIMESTEPS` |
 
 > `ENGINE_MODES` 是 gateway 路由的依據，gateway **不寫死**任何引擎能力。
-> 之後把 qwen3-tts 換成 Base checkpoint（會克隆）時，只要把它改成 `preset,clone`，
-> gateway 就會自動把克隆音色也路由過來，程式一行都不用動。
+> qwen3-tts 從 CustomVoice 換成 Base 就是這樣做的 —— 把 `preset` 改成 `clone`，
+> gateway 自動改把克隆音色路由過來，`app.py` 一行都沒動。
+> 兩個 checkpoint 的能力互斥，不要寫成 `preset,clone`。
 
 gateway 端：`ENGINES`（`名稱=網址`，逗號分隔）、`DEFAULT_ENGINE`、`API_KEY`、`REQUEST_TIMEOUT`（預設 600 秒）、`VOICES_DIR`。
 
