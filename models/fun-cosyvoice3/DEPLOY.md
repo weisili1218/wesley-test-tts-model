@@ -480,8 +480,8 @@ export TTS_API_KEY=sk-xxxx
 | `torch.cuda.is_available()` 是 False | Step 2 沒做完，或 driver < 580 |
 | `no kernel image is available for execution on the device` | 裝到非 cu130 的 torch。確認 `torch.__version__` 尾巴是 `+cu130` |
 | 中文變亂碼 | `PYTHONUTF8=1` 沒設。Dockerfile 已經設在 `ENV`，除非你改過 |
-| build 到一半磁碟滿了 | `docker system prune -af --volumes`，再確認空間（見 preflight 第 5 項） |
-| port 已經被佔用 | 四包的 port 刻意錯開（gateway 8001-8004、引擎 8081-8084）。真的撞到就改 compose 的 `ports` |
+| build 到一半磁碟滿了 | **共用主機請勿用 `docker system prune -af --volumes`** —— `-a` 會刪掉別人停用中容器的 image、`--volumes` 會刪掉別人的資料 volume。改用只清 build cache 的 `docker builder prune`，或指名 `docker image rm <ID>`。再確認空間（見 preflight 第 5 項） |
+| port 已經被佔用 | 四包的 port 刻意錯開（gateway 18001-18004、引擎 18081-18084）。真的撞到就改 compose 的 `ports` |
 | `voices.json 解析失敗` | 檔案壞了，gateway 會先備份成 `voices.broken-<時間>.json` 再報錯，可以手動修 |
 | `_pickle.UnpicklingError` / `weights_only` 相關 | torch ≥2.6 改了 `torch.load` 預設值。Dockerfile 已設 `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` |
 | `fun-cosyvoice3 是 zero-shot 克隆模型，一定要參考音檔` | 這顆沒有內建音色。先 `./voice.sh add` 建一個 |
