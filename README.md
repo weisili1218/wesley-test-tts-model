@@ -5,10 +5,10 @@ gateway、腳本與文件。任何一包單獨複製到別台機器就能跑，�
 
 ```
 models/
-├── cosyvoice2/       CosyVoice2-0.5B            gateway :8001  引擎 :8081
-├── fun-cosyvoice3/   Fun-CosyVoice3-0.5B-2512   gateway :8002  引擎 :8082
-├── qwen3-tts/        Qwen3-TTS-1.7B CustomVoice gateway :8003  引擎 :8083
-└── voxcpm2/          VoxCPM2 (OpenBMB, 2B)      gateway :8004  引擎 :8084
+├── cosyvoice2/       CosyVoice2-0.5B            gateway :18001  引擎 :18081
+├── fun-cosyvoice3/   Fun-CosyVoice3-0.5B-2512   gateway :18002  引擎 :18082
+├── qwen3-tts/        Qwen3-TTS-1.7B CustomVoice gateway :18003  引擎 :18083
+└── voxcpm2/          VoxCPM2 (OpenBMB, 2B)      gateway :18004  引擎 :18084
 ```
 
 每一包裡面都長一樣：
@@ -43,7 +43,7 @@ bash check-conflicts.sh           # 機器上有別的東西在跑的話，先�
 bash preflight.sh                 # 環境檢查，全部 [OK] 才往下
 docker compose build              # 30-60 分鐘，一定要在 GB10 上原生 build
 docker compose up -d
-curl -X POST http://localhost:8002/v1/warmup
+curl -X POST http://localhost:18002/v1/warmup
 ```
 
 Port 刻意錯開，記憶體夠的話四包可以同時起來。**預設只綁 `127.0.0.1`**，
@@ -81,7 +81,7 @@ docker daemon 的 default runtime 與 live-restore。四包裡各有一份相同
 
 | 設定 | 預設 | 意思 |
 |---|---|---|
-| gateway `ports` | `127.0.0.1:800X:8000` | 只有機器自己連得到，同網段的人連不到 |
+| gateway `ports` | `127.0.0.1:1800X:8000` | 只有機器自己連得到，同網段的人連不到 |
 | engine `ports` | 註解掉 | 引擎不對外（直接打它會繞過 gateway 的排隊機制） |
 | `restart` | `"no"` | 機器重開後不會自動復活佔住 port |
 

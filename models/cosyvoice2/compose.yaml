@@ -2,12 +2,12 @@
 #
 #   docker compose build          # 引擎十幾 GB，第一次 30-60 分鐘
 #   docker compose up -d
-#   curl -X POST http://localhost:8001/v1/warmup     # 先把模型載進 GPU
+#   curl -X POST http://localhost:18001/v1/warmup     # 先把模型載進 GPU
 #
 # 這顆是純 zero-shot 克隆，沒有內建音色，所以第一件事一定是先建一個音色：
 #   ./voice.sh add 小美 work/data/xiaomei.m4a "這段音檔的逐字稿。"
 #
-# port：gateway 8001 對外，引擎 8081 只給除錯。四包的 port 都錯開，
+# port：gateway 18001 對外，引擎 18081 只給除錯。四包的 port 都錯開，
 # 可以同時起來（記憶體夠的話）。
 
 name: cosyvoice2
@@ -25,7 +25,7 @@ services:
       # 預設只綁 localhost，機器上的其他人／同網段連不到。
       # 要從別台機器連： BIND_ADDR=0.0.0.0 docker compose up -d
       # （對外開放的話請一併把下面的 API_KEY 打開）
-      - "${BIND_ADDR:-127.0.0.1}:8001:8000"
+      - "${BIND_ADDR:-127.0.0.1}:18001:8000"
     volumes:
       - ./work/voices:/voices          # 這裡要可寫，音色就存在這
     environment:
@@ -46,7 +46,7 @@ services:
     # 引擎預設不對外。直接打它會繞過 gateway 的排隊機制（引擎自己沒有 request
     # queue），同時兩個請求進去可能把記憶體吃爆。要除錯再把下面兩行取消註解。
     # ports:
-      # - "8081:8080"
+      # - "18081:8080"
     environment:
       NVIDIA_VISIBLE_DEVICES: all
     volumes:
