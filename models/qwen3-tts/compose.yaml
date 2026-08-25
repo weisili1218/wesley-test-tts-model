@@ -26,6 +26,15 @@ services:
       context: ./gateway
     init: true
     restart: "no"                    # 測試用：不要在機器重開後自動復活
+    # 這台 daemon 沒有設定全域 log rotation（/etc/docker/daemon.json 不存在），
+    # 容器的 json log 預設會無限長大，最後撐爆 /var/lib/docker —— 那會連累同機
+    # 所有服務（含 3 個 MySQL、1 個 PostgreSQL）。在這裡自己限死，上限 30 MB。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    mem_limit: 4g                    # gateway 不吃 GPU，image <200MB，4g 綽綽有餘
     ports:
       # 預設只綁 localhost，機器上的其他人／同網段連不到。
       # 要從別台機器連： BIND_ADDR=0.0.0.0 docker compose up -d
@@ -48,6 +57,18 @@ services:
       context: ./engine
     init: true
     restart: "no"                    # 測試用：不要在機器重開後自動復活
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # CPU 側失控的保險，設寬鬆到不影響任何正常運作。
+    #
+    # ⚠ 這行**擋不住** GPU 側把 unified memory 吃光。在 GB10 上實測過：
+    #   mem_limit 2g 的容器仍能在 GPU 配置 2.79 GiB，容器 cgroup 只計到 0.39 GiB
+    #   —— CUDA 走 /dev/nvidia* 的配置不受 memory cgroup 管制。
+    #   要避免吃光整台的 unified memory，唯一有效的辦法是「一次只起一包」。
+    mem_limit: 32g
     # 引擎預設不對外。直接打它會繞過 gateway 的排隊機制（引擎自己沒有 request
     # queue），同時兩個請求進去可能把記憶體吃爆。要除錯再把下面兩行取消註解。
     # ports:
