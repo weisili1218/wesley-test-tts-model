@@ -6,17 +6,17 @@
 各包的 `DEPLOY.md` Step 9 是該包的簡表；這份是跨四包的完整版。
 
 ```
-你的 client ──HTTP──▶ gateway :800X ──HTTP──▶ engine :8080（容器內）
+你的 client ──HTTP──▶ gateway :1800X ──HTTP──▶ engine :8080（容器內）
                       音色庫 + 排隊              吃 GPU、只做推論
                       OpenAI 相容               不對外
 ```
 
 | 包 | gateway port | 引擎除錯 port | `model` 名稱 | 支援的 mode |
 |---|---|---|---|---|
-| cosyvoice2 | 8001 | 8081 | `cosyvoice2` | `clone` |
-| fun-cosyvoice3 | 8002 | 8082 | `fun-cosyvoice3` | `clone` |
-| qwen3-tts | 8003 | 8083 | `qwen3-tts` | `preset` |
-| voxcpm2 | 8004 | 8084 | `voxcpm2` | `clone` / `design` / `default` |
+| cosyvoice2 | 18001 | 18081 | `cosyvoice2` | `clone` |
+| fun-cosyvoice3 | 18002 | 18082 | `fun-cosyvoice3` | `clone` |
+| qwen3-tts | 18003 | 18083 | `qwen3-tts` | `preset` |
+| voxcpm2 | 18004 | 18084 | `voxcpm2` | `clone` / `design` / `default` |
 
 > 路由四包都有（同一份 app.py），引擎沒能力的那幾條會回 **400 + 人看得懂的原因**，
 > 不會是空白的 500。
@@ -28,7 +28,7 @@
 | | 設在哪 | 說明 |
 |---|---|---|
 | `API_KEY` | compose.yaml 的 gateway `environment` | 有設才啟用。所有 `/v1/*` 都要帶 `Authorization: Bearer <key>` |
-| `TTS_GATEWAY` | 你的 shell | `voice.sh` / `synth.sh` / `batch.py` 用，預設 `http://localhost:800X` |
+| `TTS_GATEWAY` | 你的 shell | `voice.sh` / `synth.sh` / `batch.py` 用，預設 `http://localhost:1800X` |
 | `TTS_API_KEY` | 你的 shell | 同上，腳本會自己帶成 Bearer header |
 
 不需要 token 的：`/healthz`、`/docs`、`/openapi.json`。
@@ -72,7 +72,7 @@
 可加 `?engine=<name>`（這一包只有一顆，通常不用）。順便清掉能力快取。
 
 ```bash
-curl -X POST http://localhost:8004/v1/warmup
+curl -X POST http://localhost:18004/v1/warmup
 # {"voxcpm2": {"loaded": true, "sample_rate": 48000}}
 ```
 
@@ -110,7 +110,7 @@ Body 是 JSON，回 **audio binary**（不是 JSON）。
 4. 都沒有 → **400**，要你先 `POST /v1/voices` 上傳參考音檔
 
 ```bash
-curl -X POST http://localhost:8002/v1/audio/speech \
+curl -X POST http://localhost:18002/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -d '{"input":"今天天氣真好。","model":"fun-cosyvoice3","voice":"小美","response_format":"mp3"}' \
   --output out.mp3
@@ -161,7 +161,7 @@ curl -X POST http://localhost:8002/v1/audio/speech \
 JSON，回 **201**。只有引擎宣告支援 `design` 才能用（目前是 voxcpm2），否則 400。
 
 ```bash
-curl -X POST http://localhost:8004/v1/voices/design \
+curl -X POST http://localhost:18004/v1/voices/design \
   -H 'Content-Type: application/json' \
   -d '{"name":"溫柔女聲","description":"一位溫柔的年輕女性，語速偏慢，咬字清楚"}'
 ```
@@ -339,4 +339,4 @@ gateway 端：`ENGINES`（`名稱=網址`，逗號分隔）、`DEFAULT_ENGINE`�
 | **gateway 有四份副本** | 改完一包要同步：`for d in models/*/gateway; do cp models/cosyvoice2/gateway/app.py "$d/app.py"; done` |
 | **音色庫不共用** | 每包自己的 `work/voices/`。要共用就整個目錄複製過去 |
 
-互動式文件（FastAPI 自動產生，免 token）：`http://localhost:800X/docs`。
+互動式文件（FastAPI 自動產生，免 token）：`http://localhost:1800X/docs`。

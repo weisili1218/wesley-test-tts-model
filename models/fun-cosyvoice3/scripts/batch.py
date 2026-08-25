@@ -74,7 +74,7 @@ def main():
     ap = argparse.ArgumentParser(description=f"批次合成（{ENGINE}）")
     ap.add_argument("csv_file", type=Path)
     ap.add_argument("--output-dir", type=Path, default=Path("work/results"))
-    ap.add_argument("--base", default=os.environ.get("TTS_GATEWAY", "http://localhost:8002"))
+    ap.add_argument("--base", default=os.environ.get("TTS_GATEWAY", "http://localhost:18002"))
     ap.add_argument("--api-key", default=os.environ.get("TTS_API_KEY", ""))
     ap.add_argument("--voice", default=None, help="覆蓋 CSV 裡的 voice 欄位")
     ap.add_argument("--format", default="wav", choices=sorted(FORMAT_EXT))

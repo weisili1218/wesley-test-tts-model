@@ -66,7 +66,7 @@ df -h /var/lib/docker 2>/dev/null | sed 's/^/  /' || df -h / | sed 's/^/  /'
 AVAIL=$(df -BG --output=avail /var/lib/docker 2>/dev/null | tail -1 | tr -dc '0-9')
 [ -z "${AVAIL:-}" ] && AVAIL=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
 if [ "${AVAIL:-0}" -ge 60 ]; then ok "剩餘 ${AVAIL}G"
-elif [ "${AVAIL:-0}" -ge 30 ]; then warn "只剩 ${AVAIL}G，build 會很緊。先 docker system prune -af 清一下。"
+elif [ "${AVAIL:-0}" -ge 30 ]; then warn "只剩 ${AVAIL}G，build 會很緊。共用主機請「不要」用 docker system prune -af（會刪掉別人停用中的 image）；改用 docker builder prune 只清 build cache，或 docker image rm <指定 ID>。"
 else bad "只剩 ${AVAIL}G，不夠 build。先清理或加掛磁碟。"; fi
 
 echo

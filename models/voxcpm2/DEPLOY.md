@@ -5,8 +5,8 @@
 **這是一包完全獨立的部署單元**：一顆引擎 + 一個自己的 gateway，跟 `models/` 底下
 另外三包零依賴。整個資料夾複製到別台機器就能單獨跑，不用管其他模型。
 
-- 對外入口： `http://localhost:8004`
-- 引擎除錯用： `http://localhost:8084`（正常不用碰）
+- 對外入口： `http://localhost:18004`
+- 引擎除錯用： `http://localhost:18084`（正常不用碰）
 - HF repo： `openbmb/VoxCPM2`
 
 ---
@@ -34,7 +34,7 @@ voxcpm2/
 架構：
 
 ```
-你 ──HTTP:8004──▶ gateway ──內部網路──▶ engine :8080
+你 ──HTTP:18004──▶ gateway ──內部網路──▶ engine :8080
                   音色庫                voxcpm2
               work/voices/
 ```
@@ -83,7 +83,7 @@ gateway。`gateway/app.py` 四包完全一樣，不寫死引擎名稱 —— 掛
 bash check-conflicts.sh
 ```
 
-會告訴你：8 個 port（gateway 8001-8004、engine 8081-8084）誰佔著、既有的 docker
+會告訴你：8 個 port（gateway 18001-18004、engine 18081-18084）誰佔著、既有的 docker
 容器／compose 專案／image tag 有沒有跟這四包撞名、GPU 上現在有哪些 process 吃了多少
 記憶體、`/var/lib/docker` 剩多少、docker daemon 的 default runtime 與 live-restore。
 
@@ -96,12 +96,12 @@ bash check-conflicts.sh
 
 | 設定 | 預設 | 意思 |
 |---|---|---|
-| gateway 的 `ports` | `127.0.0.1:8004:8000` | **只有這台機器自己連得到**，同網段的人連不到 |
+| gateway 的 `ports` | `127.0.0.1:18004:8000` | **只有這台機器自己連得到**，同網段的人連不到 |
 | engine 的 `ports` | 註解掉 | 引擎不對外。直接打它會繞過 gateway 的排隊機制（引擎自己沒有 request queue），同時兩個請求進去可能把記憶體吃爆 |
 | 兩個 service 的 `restart` | `"no"` | 機器重開或 docker daemon 重啟後**不會自動復活**佔住 port |
 
 在 GB10 上（SSH 進去）跑 `./synth.sh`、`./voice.sh`、`scripts/batch.py` 都正常，
-因為它們打的就是 `localhost:8004`。
+因為它們打的就是 `localhost:18004`。
 
 **要從別台機器連**（例如你的筆電、或另一個服務要呼叫它）：
 
@@ -114,7 +114,7 @@ gateway 的 `API_KEY` 取消註解、換成你自己的字串，然後在客戶�
 `export TTS_API_KEY=<同一個字串>`。
 
 **要除錯直接戳引擎**：把 `compose.yaml` 裡 engine 的 `ports:` 跟下面那行取消註解，
-就會露出 `8084`。用完記得註解回去。
+就會露出 `18084`。用完記得註解回去。
 
 ### 3. 一次只起一包
 
@@ -299,8 +299,8 @@ print('capability :', torch.cuda.get_device_capability(0))
 先主動暖機比較不會嚇到：
 
 ```bash
-curl -X POST http://localhost:8004/v1/warmup
-curl -s http://localhost:8004/v1/models | python3 -m json.tool
+curl -X POST http://localhost:18004/v1/warmup
+curl -s http://localhost:18004/v1/models | python3 -m json.tool
 ```
 
 ---
@@ -338,18 +338,18 @@ curl -s http://localhost:8004/v1/models | python3 -m json.tool
 ### 直接打 API
 
 ```bash
-curl -X POST http://localhost:8004/v1/voices \
+curl -X POST http://localhost:18004/v1/voices \
   -F "name=小美" \
   -F "file=@work/data/xiaomei.wav" \
   -F "transcript=這裡放這段音檔的逐字稿。" \
   -F "language=zh"
 
-curl -X POST http://localhost:8004/v1/voices/design \
+curl -X POST http://localhost:18004/v1/voices/design \
   -H 'Content-Type: application/json' \
   -d '{"name":"溫柔女聲","description":"一位溫柔的年輕女性，語速偏慢"}'
 
-curl http://localhost:8004/v1/voices
-curl -X DELETE http://localhost:8004/v1/voices/voice_a1b2c3d4e5f6
+curl http://localhost:18004/v1/voices
+curl -X DELETE http://localhost:18004/v1/voices/voice_a1b2c3d4e5f6
 ```
 
 
@@ -372,7 +372,7 @@ curl -X DELETE http://localhost:8004/v1/voices/voice_a1b2c3d4e5f6
 ### OpenAI 相容 API
 
 ```bash
-curl -X POST http://localhost:8004/v1/audio/speech \
+curl -X POST http://localhost:18004/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -d '{
         "model": "voxcpm2",
@@ -400,8 +400,8 @@ Python 端可以直接用 openai 套件：
 ```python
 from openai import OpenAI
 # 在 GB10 上跑就用 localhost；從別台機器連的話，服務要先用
-# BIND_ADDR=0.0.0.0 docker compose up -d 起來，這裡再換成 http://gb10:8004/v1
-client = OpenAI(base_url="http://localhost:8004/v1", api_key="不檢查的話隨便填")
+# BIND_ADDR=0.0.0.0 docker compose up -d 起來，這裡再換成 http://gb10:18004/v1
+client = OpenAI(base_url="http://localhost:18004/v1", api_key="不檢查的話隨便填")
 client.audio.speech.create(model="voxcpm2", voice="小美",
                            input="測試一下。").stream_to_file("out.wav")
 ```
@@ -456,7 +456,7 @@ python3 scripts/batch.py work/data/batch.csv --voice 小美
 | DELETE | `/v1/voices/{id}` | 刪除，連 wav 一起 | ✅ |
 | POST | `/v1/voices/{id}/preview` | 試聽，可加 `?text=` | ✅ |
 
-互動式文件在 `http://localhost:8004/docs`。
+互動式文件在 `http://localhost:18004/docs`。
 
 > 標成「不支援」的那幾條路由還是存在（gateway 四包共用同一份 app.py），
 > 只是這顆引擎沒有對應能力，打了會回 400 並附上人看得懂的原因，不會是空白的 500。
@@ -468,11 +468,11 @@ python3 scripts/batch.py work/data/batch.csv --voice 小美
 `Authorization: Bearer <key>`（`/healthz` 不用）。腳本則設環境變數：
 
 ```bash
-export TTS_GATEWAY=http://gb10:8004      # 前提：服務用 BIND_ADDR=0.0.0.0 起來
+export TTS_GATEWAY=http://gb10:18004      # 前提：服務用 BIND_ADDR=0.0.0.0 起來
 export TTS_API_KEY=sk-xxxx
 ```
 
-在 GB10 上直接跑腳本的話不用設 `TTS_GATEWAY`，預設就是 `http://localhost:8004`。
+在 GB10 上直接跑腳本的話不用設 `TTS_GATEWAY`，預設就是 `http://localhost:18004`。
 
 ---
 
@@ -485,8 +485,8 @@ export TTS_API_KEY=sk-xxxx
 | `torch.cuda.is_available()` 是 False | Step 2 沒做完，或 driver < 580 |
 | `no kernel image is available for execution on the device` | 裝到非 cu130 的 torch。確認 `torch.__version__` 尾巴是 `+cu130` |
 | 中文變亂碼 | `PYTHONUTF8=1` 沒設。Dockerfile 已經設在 `ENV`，除非你改過 |
-| build 到一半磁碟滿了 | `docker system prune -af --volumes`，再確認空間（見 preflight 第 5 項） |
-| port 已經被佔用 | 四包的 port 刻意錯開（gateway 8001-8004、引擎 8081-8084）。真的撞到就改 compose 的 `ports` |
+| build 到一半磁碟滿了 | **共用主機請勿用 `docker system prune -af --volumes`** —— `-a` 會刪掉別人停用中容器的 image、`--volumes` 會刪掉別人的資料 volume。改用只清 build cache 的 `docker builder prune`，或指名 `docker image rm <ID>`。再確認空間（見 preflight 第 5 項） |
+| port 已經被佔用 | 四包的 port 刻意錯開（gateway 18001-18004、引擎 18081-18084）。真的撞到就改 compose 的 `ports` |
 | `voices.json 解析失敗` | 檔案壞了，gateway 會先備份成 `voices.broken-<時間>.json` 再報錯，可以手動修 |
 | 第一次合成卡很久 | `VOXCPM_OPTIMIZE=1` 會做 torch.compile。預設是關的；開了就是在等編譯 |
 | `speed` 設了沒反應 | 正常，這顆會忽略 `speed`。要調語速改用 `instructions` 描述 |

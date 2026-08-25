@@ -3,7 +3,7 @@
 # check-conflicts.sh — 上機衝突偵測（唯讀）
 #
 # 用途：在「已經在跑別的東西」的 GB10 / DGX Spark 上，先確認把 models/ 底下這
-#       四包 TTS（gateway 8001-8004、engine 8081-8084）build 起來、跑起來，
+#       四包 TTS（gateway 18001-18004、engine 18081-18084）build 起來、跑起來，
 #       會不會踩到既有的服務、容器、image、GPU 工作或磁碟。
 #
 # 用法：
@@ -33,8 +33,8 @@ bad()  { printf '  %s[FAIL]%s %s\n'   "$C_R" "$C_0" "$1"; N_FAIL=$((N_FAIL+1)); 
 info() { printf '         %s\n' "$1"; }
 sect() { printf '\n%s=== %s ===%s\n' "$C_B" "$1" "$C_0"; }
 
-GATEWAY_PORTS="8001 8002 8003 8004"
-ENGINE_PORTS="8081 8082 8083 8084"
+GATEWAY_PORTS="18001 18002 18003 18004"
+ENGINE_PORTS="18081 18082 18083 18084"
 ALL_PORTS="$GATEWAY_PORTS $ENGINE_PORTS"
 PROJECTS="cosyvoice2 fun-cosyvoice3 qwen3-tts voxcpm2"
 IMAGE_TAGS="tts-cosyvoice2:gb10 tts-cosyvoice2-gateway:gb10
@@ -48,7 +48,7 @@ HAVE_NVSMI=0
 
 printf '%s' "$C_B"
 echo "==========================================================================="
-echo " TTS 四包（gateway 8001-8004 / engine 8081-8084）上機衝突檢查 — 唯讀"
+echo " TTS 四包（gateway 18001-18004 / engine 18081-18084）上機衝突檢查 — 唯讀"
 echo "==========================================================================="
 printf '%s' "$C_0"
 echo " 時間     : $(date '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null)"
@@ -93,7 +93,7 @@ if [ "$(id -u 2>/dev/null)" != "0" ]; then
 fi
 
 # =============================================================================
-sect "1. Host port 佔用（8001-8004 gateway / 8081-8084 engine）"
+sect "1. Host port 佔用（18001-18004 gateway / 18081-18084 engine）"
 # =============================================================================
 listeners_for() {
   # $1 = port；印出 raw 的 listening 行（可能多行：IPv4 + IPv6）
@@ -139,9 +139,9 @@ done
 if [ "$PORT_BUSY" -gt 0 ]; then
   info ""
   info "有 port 被佔用時的處理："
-  info "  * 撞到的是 engine port（8081-8084）→ 直接把 compose.yaml 裡 engine 的"
+  info "  * 撞到的是 engine port（18081-18084）→ 直接把 compose.yaml 裡 engine 的"
   info "    ports: 兩行註解掉。gateway 走內部網路一樣連得到，不需要對外。"
-  info "  * 撞到的是 gateway port（8001-8004）→ 改成沒人用的號碼，例如"
+  info "  * 撞到的是 gateway port（18001-18004）→ 改成沒人用的號碼，例如"
   info "    ports: - \"127.0.0.1:18001:8000\""
   info "  * 已知會撞的常見服務：Triton Inference Server 預設 8000/8001/8002"
   info "    （HTTP/gRPC/metrics），vLLM 預設 8000，很多 dev server 用 8080/8081。"
@@ -461,8 +461,8 @@ cat <<'SUMMARY'
 
   建議在 up 之前先改 compose.yaml：
     * restart: unless-stopped  →  restart: "no"      （避免重開機自動佔住 GPU 跟 port）
-    * engine 的 ports: 8081-8084 整段刪掉             （gateway 走內部網路就連得到）
-    * gateway 的 "800X:8000" →  "127.0.0.1:800X:8000" （不要對整個網段開沒有認證的 API）
+    * engine 的 ports: 18081-18084 整段刪掉             （gateway 走內部網路就連得到）
+    * gateway 的 "1800X:8000" →  "127.0.0.1:1800X:8000" （不要對整個網段開沒有認證的 API）
     * engine 的 NVIDIA_VISIBLE_DEVICES: all 刪掉      （deploy.reservations 已經給了 GPU）
 SUMMARY
 

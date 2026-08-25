@@ -20,7 +20,7 @@ TEXT="${1:?請給要合成的文字}"
 VOICE="${2:-}"
 OUT="${3:-output.wav}"
 
-BASE="${TTS_GATEWAY:-http://localhost:8002}"
+BASE="${TTS_GATEWAY:-http://localhost:18002}"
 # 陣列刻意不留空：set -u 底下展開空陣列在舊版 bash 會報 unbound variable
 AUTH=(-H "X-Client: tts-scripts")
 [ -n "${TTS_API_KEY:-}" ] && AUTH+=(-H "Authorization: Bearer ${TTS_API_KEY}")

@@ -19,10 +19,21 @@ FROM ubuntu:24.04
 
 ARG TORCH_VERSION=2.11.0
 ARG TORCHAUDIO_VERSION=2.11.0
+# torchaudio 2.8 起把 load/save 的實作全部委派給 torchcodec，2.11 已經沒有內建
+# backend。原始碼裡的 torchaudio.load(wav, backend='soundfile') 那個參數會被
+# **直接忽略**（官方 docstring：「The buffer_size and backend parameters are
+# ignored」），沒裝 torchcodec 就是 ImportError。
+#
+# 一定要從 TORCH_INDEX 裝、不要讓它從 PyPI 進來，否則 ABI 可能對不上：
+# torch 2.10 時期 torchcodec 全版本都是 undefined symbol: torch_from_blob，
+# 那個符號是 2.11 的 libtorch_cpu.so 才開始匯出的（用 nm -D 驗過）。
+ARG TORCHCODEC_VERSION=0.16.0
 # GB10 是 Blackwell sm_121，必須 CUDA 13 的 wheel。
 # 想改純 CPU 測試：--build-arg TORCH_INDEX=https://pypi.org/simple
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cu130
-ARG COSYVOICE_REF=main
+# 釘 commit 而不是 main —— main 是浮動的，今天跟下個月 build 會拿到不同程式碼。
+# 要跟上游就 --build-arg COSYVOICE_REF=main 覆寫。
+ARG COSYVOICE_REF=074ca6d
 ARG MODEL_REPO=FunAudioLLM/Fun-CosyVoice3-0.5B-2512
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -49,7 +60,8 @@ RUN python3 -m venv /opt/env && pip install --no-cache-dir -U pip setuptools whe
 # 先裝 torch，後面的相依才不會從 PyPI 把 CPU 版 torch 蓋回來。
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --index-url ${TORCH_INDEX} \
-        torch==${TORCH_VERSION} torchaudio==${TORCHAUDIO_VERSION}
+        torch==${TORCH_VERSION} torchaudio==${TORCHAUDIO_VERSION} \
+        torchcodec==${TORCHCODEC_VERSION}
 
 # --- 其餘 Python 相依 --------------------------------------------------------
 COPY requirements.txt /tmp/requirements.txt
@@ -72,15 +84,39 @@ snapshot_download('${MODEL_REPO}', local_dir='/models/fun-cosyvoice3')"
 
 COPY server.py /opt/server/server.py
 
-# --- 冒煙測試：build 階段就確認能 import，壞掉不會產出壞 image ---------------
+# --- 冒煙測試 ----------------------------------------------------------------
+# 原本只驗 import，但這條路徑上有三個坑是「build 過得了、載模型才炸」的，
+# 那代表要先燒掉 30-60 分鐘 build 才會發現。以下把它們全部提前到 build 階段：
+#
+#   ① pkg_resources  ── setuptools 81+ 移除了它，而 flow_matching → matcha →
+#                       pylogger → lightning 這條鏈需要它
+#   ② ruamel.yaml    ── 0.19 的 max_depth 檢查會打死 HyperPyYAML 的 legacy Loader，
+#                       而 CosyVoice3.__init__ 一開始就呼叫 load_hyperpyyaml
+#   ③ torchcodec     ── torchaudio 2.11 的 load/save 全部委派給它，且會忽略
+#                       原始碼指定的 backend='soundfile'
 RUN python -c "\
-import torch, onnxruntime, torchaudio, whisper; \
+import torch, onnxruntime, torchaudio, whisper, pkg_resources; \
 from wetext import Normalizer; \
-from cosyvoice.cli.cosyvoice import CosyVoice3; \
-print('torch', torch.__version__); \
-print('ort  ', onnxruntime.__version__); \
+print('torch     ', torch.__version__); \
+print('ort       ', onnxruntime.__version__); \
+print('torchaudio', torchaudio.__version__); \
 Normalizer(remove_erhua=False); \
-print('wetext OK / CosyVoice3 import OK')"
+print('wetext OK')" \
+ && python -c "\
+from cosyvoice.cli.cosyvoice import CosyVoice3; \
+from cosyvoice.flow.flow_matching import ConditionalCFM; \
+print('CosyVoice3 + flow_matching(matcha/lightning 鏈) OK')" \
+ && python -c "\
+import ruamel.yaml; from hyperpyyaml import load_hyperpyyaml; \
+assert load_hyperpyyaml('a: 1') == {'a': 1}; \
+print('hyperpyyaml OK / ruamel', ruamel.yaml.version_info)" \
+ && python -c "\
+import io, torch, torchaudio, torchcodec; \
+sr = 22050; w = torch.zeros(1, sr); \
+b = io.BytesIO(); torchaudio.save(b, w, sr, format='wav'); b.seek(0); \
+w2, sr2 = torchaudio.load(b); \
+assert w2.shape == w.shape and sr2 == sr, (w2.shape, sr2); \
+print('torchcodec', torchcodec.__version__, '/ torchaudio load+save OK')"
 
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
