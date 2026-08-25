@@ -263,9 +263,38 @@ if [ "$DOCKER_OK" -eq 1 ]; then
   info "CgroupDriver   : ${CGD:-unknown}"
   info "DockerRootDir  : ${ROOT:-/var/lib/docker}"
 
+  # 注意：「沒有註冊 nvidia runtime」不等於「不能用 GPU」。
+  # Docker 19.03 起有原生 GPU 支援：--gpus / deploy.resources.devices 會走
+  # DeviceRequests，由 nvidia-container-runtime-hook 掛載，容器 runtime 仍是 runc。
+  # DGX OS 出廠就是這種設定。只看 runtime 清單會誤判成 FAIL，而照那個 FAIL 去
+  # nvidia-ctk runtime configure + systemctl restart docker，正是本腳本一再警告
+  # 不要做的事（會把機器上所有容器彈掉）。
+  # 這裡改用唯讀的方式找證據 —— 本腳本承諾不 run 容器，所以不做實測。
   case "$RTS" in
-    *nvidia*) ok "nvidia runtime 已註冊，四包的 GPU 保留不需要再改 daemon 設定" ;;
-    *) bad "docker 沒有註冊 nvidia runtime —— 要能跑就得改 daemon 設定並重啟 docker，那會影響機器上所有容器。先跟機器的擁有者確認。" ;;
+    *nvidia*)
+      ok "nvidia runtime 已註冊，四包的 GPU 保留不需要再改 daemon 設定"
+      ;;
+    *)
+      GPU_HOOK=""
+      command -v nvidia-container-runtime-hook >/dev/null 2>&1 && GPU_HOOK=1
+      GPU_PROOF="$(docker ps -q 2>/dev/null | while read -r c; do
+            docker inspect "$c" --format '{{if .HostConfig.DeviceRequests}}{{.Name}}{{end}}' 2>/dev/null
+          done | grep -v '^$' | sed 's|^/||' | head -3 | tr '\n' ' ')"
+      if [ -n "$GPU_PROOF" ]; then
+        ok "沒註冊 nvidia runtime，但這台走的是 Docker 原生 GPU 支援（DeviceRequests）"
+        info "        實證：同機已有容器正以此機制使用 GPU —— ${GPU_PROOF}"
+        info "        不需要改 daemon 設定，更不要 systemctl restart docker。"
+        info "        要親自確認就跑 preflight.sh，它會實際起一個容器測 nvidia-smi。"
+      elif [ -n "$GPU_HOOK" ]; then
+        warn "沒註冊 nvidia runtime，但找得到 nvidia-container-runtime-hook —— 這台很可能"
+        info "        是走 Docker 原生 GPU 支援（DGX OS 預設）。請跑 preflight.sh 實測確認。"
+        info "        測得過就不需要改 daemon 設定，也不要 systemctl restart docker。"
+      else
+        bad "沒註冊 nvidia runtime，也找不到 nvidia-container-runtime-hook。"
+        info "        先跑 preflight.sh 實測 docker run --gpus all；真的不行再跟機器擁有者"
+        info "        確認 —— 改 daemon 設定要 restart docker，會影響機器上所有容器。"
+      fi
+      ;;
   esac
 
   if [ "$DEF_RT" = "nvidia" ]; then
