@@ -7,7 +7,7 @@ gateway、腳本與文件。任何一包單獨複製到別台機器就能跑，�
 models/
 ├── cosyvoice2/       CosyVoice2-0.5B            gateway :18001  引擎 :18081
 ├── fun-cosyvoice3/   Fun-CosyVoice3-0.5B-2512   gateway :18002  引擎 :18082
-├── qwen3-tts/        Qwen3-TTS-1.7B CustomVoice gateway :18003  引擎 :18083
+├── qwen3-tts/        Qwen3-TTS-1.7B Base        gateway :18003  引擎 :18083
 └── voxcpm2/          VoxCPM2 (OpenBMB, 2B)      gateway :18004  引擎 :18084
 ```
 
@@ -57,11 +57,15 @@ Port 刻意錯開，記憶體夠的話四包可以同時起來。**預設只綁 
 |---|---|---|
 | **fun-cosyvoice3** | 克隆品質最好。只想試一顆的話就試這顆 | 要（5-15 秒乾淨單人） |
 | **cosyvoice2** | 前一代，拿來跟上面那顆做 A/B 比較 | 要 |
-| **qwen3-tts** | 內建 9 個精選音色，**開箱即用**，最快看到結果 | 不用 |
+| **qwen3-tts** | 另一條技術路線的克隆（transformers 4.57.3，跟 CosyVoice 那兩顆互斥）| 要 |
 | **voxcpm2** | 功能最全：48kHz、30 種語言，可用一句文字描述造音色 | 不用（三種模式都吃） |
 
-**第一次上機建議的順序**：先 `qwen3-tts`（不用準備素材，最快確認整條路通不通），
-再 `fun-cosyvoice3`（實際要用的克隆品質），其他兩顆看需求。
+**第一次上機建議的順序**：先 `voxcpm2`（它的 default 模式不用準備素材，最快確認整條路
+通不通），再 `fun-cosyvoice3`（實際要用的克隆品質），其他兩顆看需求。
+
+> `qwen3-tts` 這包原本掛 CustomVoice checkpoint（內建 9 個精選音色、開箱即用），
+> 已換成 Base checkpoint 換取上傳克隆的能力 —— 兩者只能二選一。要換回去見
+> `models/qwen3-tts/DEPLOY.md` 的「換模型」。
 
 ---
 

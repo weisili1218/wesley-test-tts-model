@@ -3,8 +3,8 @@
 # Qwen3-TTS-12Hz-1.7B-CustomVoice  ── NVIDIA DGX Spark / GB10
 #                                      (linux/arm64, Blackwell sm_121)
 #
-# 這顆是四個引擎裡唯一「不靠上傳音檔克隆」的：CustomVoice 走的是內建 9 個精選
-# 音色 + 自然語言指令控制。所以 gateway 會把它的音色當成 preset 類型處理。
+# 這一包掛的是 Base checkpoint：純克隆模型，吃一段參考音檔 + 逐字稿。
+# 沒有內建音色 —— 那是 CustomVoice checkpoint 才有的（見下面 MODEL_REPO 註解）。
 #
 # GB10 上要處理的：
 #   1. torch 沒有能跑 sm_121 的預設 build  → cu130 index 的 2.11.0 aarch64 wheel
@@ -18,9 +18,13 @@ FROM ubuntu:24.04
 ARG TORCH_VERSION=2.11.0
 ARG TORCHAUDIO_VERSION=2.11.0
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cu130
-# 想要真正的「3 秒上傳克隆」就把這行換成 Qwen/Qwen3-TTS-12Hz-1.7B-Base，
-# 想要純文字描述造音色就換 Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign。
-ARG MODEL_REPO=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+# 這兩個 checkpoint 換著掛都可以，換的時候記得一起改下面的 ENGINE_MODES：
+#   -Base         上傳音檔克隆，沒有內建音色  → ENGINE_MODES=clone    （目前這個）
+#   -CustomVoice  內建 9 個精選音色，不能克隆  → ENGINE_MODES=preset
+# server.py 兩種 mode 都實作了，換 checkpoint 不用改程式，只有這兩個值要對上。
+# （還有一個 -VoiceDesign 走純文字描述造音色，但它的 API 跟這兩個不同，
+#   server.py 沒實作，要用得自己補一條 mode=design 的分支。）
+ARG MODEL_REPO=Qwen/Qwen3-TTS-12Hz-1.7B-Base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUTF8=1 \
@@ -75,7 +79,7 @@ ENV HF_HUB_OFFLINE=1 \
     QWEN_ATTN=sdpa \
     QWEN_DTYPE=bfloat16 \
     QWEN_DEFAULT_SPEAKER=Vivian \
-    ENGINE_MODES=preset
+    ENGINE_MODES=clone
 
 EXPOSE 8080
 WORKDIR /opt/server

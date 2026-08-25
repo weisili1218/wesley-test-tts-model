@@ -231,7 +231,9 @@ FALLBACK_MODES = {
     "cosyvoice2": ["clone"],
     "fun-cosyvoice3": ["clone"],
     "voxcpm2": ["clone", "design", "default"],
-    "qwen3-tts": ["preset"],
+    # qwen3-tts 目前掛 Base checkpoint（純克隆）。換回 CustomVoice 的話這裡是 ["preset"]，
+    # 不過這張表只在引擎連不上、拿不到 /health 時才會用到，正常都是照引擎宣告的走。
+    "qwen3-tts": ["clone"],
 }
 
 

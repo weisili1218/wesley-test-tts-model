@@ -1,16 +1,22 @@
 """
-Qwen3-TTS-12Hz-1.7B-CustomVoice engine HTTP server。
+Qwen3-TTS-12Hz-1.7B engine HTTP server。
 
-跟另外三顆引擎不一樣的地方（很重要）：
-  CustomVoice 這個 checkpoint 走的是「內建精選音色 + 指令控制」，
-  不是「上傳一段音檔克隆」。所以：
-    - mode=preset  → 用內建 speaker（Vivian / Serena / Uncle_Fu / ...），這是主要用法
-    - mode=clone   → 會嘗試 generate_voice_clone；CustomVoice 權重通常不支援，
-                     失敗時回 400 並建議改用 CosyVoice/VoxCPM 那三顆
-  要真正的 3 秒克隆請改掛 Qwen/Qwen3-TTS-12Hz-1.7B-Base（改 MODEL_REPO 重 build）。
+這支對兩個 checkpoint 都適用，能力由 ENGINE_MODES 宣告（Dockerfile 設）：
+
+  -Base（目前掛的）      ENGINE_MODES=clone
+    mode=clone   → generate_voice_clone(ref_audio, ref_text)，上傳一段參考音檔克隆
+    mode=preset  → 400，這個 checkpoint 沒有內建 speaker
+
+  -CustomVoice           ENGINE_MODES=preset
+    mode=preset  → generate_custom_voice(speaker, instruct)，9 個內建精選音色
+    mode=clone   → 400，這個 checkpoint 不會克隆
+
+兩邊都吃 instruct（語氣／風格指令）。換 checkpoint 只要改 Dockerfile 的
+MODEL_REPO + ENGINE_MODES 重 build，這支不用動。
 
 環境變數：
   ENGINE_NAME / MODEL_PATH / QWEN_ATTN / QWEN_DTYPE / QWEN_DEFAULT_SPEAKER
+  ENGINE_MODES —— gateway 靠它決定要把哪種音色路由過來，一定要跟 checkpoint 對上
 """
 import io
 import os
@@ -36,10 +42,11 @@ ATTN = os.environ.get("QWEN_ATTN", "sdpa")
 DTYPE = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[
     os.environ.get("QWEN_DTYPE", "bfloat16")
 ]
+# 只有 CustomVoice checkpoint 用得到；Base 沒有內建 speaker，這個值是死的。
 DEFAULT_SPEAKER = os.environ.get("QWEN_DEFAULT_SPEAKER", "Vivian")
-# CustomVoice checkpoint 只有 preset 音色。換成 Qwen3-TTS-12Hz-1.7B-Base 重 build 時，
-# 把這個環境變數設成 "preset,clone"，gateway 就會自動把克隆音色也路由過來。
-MODES = [m.strip() for m in os.environ.get("ENGINE_MODES", "preset").split(",") if m.strip()]
+# 要跟 MODEL_REPO 對上：Base → "clone"，CustomVoice → "preset"。
+# gateway 完全照這個宣告來路由，不寫死任何引擎能力。
+MODES = [m.strip() for m in os.environ.get("ENGINE_MODES", "clone").split(",") if m.strip()]
 
 app = FastAPI(title=f"{ENGINE_NAME} engine")
 _model = None
@@ -61,7 +68,8 @@ def get_model():
 
 class SynthRequest(BaseModel):
     text: str
-    mode: str = "preset"
+    # 沒給就用宣告的第一個 mode，這樣直接戳引擎除錯時不用每次帶
+    mode: str = MODES[0] if MODES else "clone"
     ref_audio_path: str | None = None
     ref_text: str | None = None
     description: str | None = None
@@ -79,7 +87,8 @@ def health():
         "loaded": _model is not None,
         "sample_rate": None,
         "modes": MODES,
-        "needs_ref_audio": False,
+        # Base 只會克隆，沒有參考音檔就發不出聲音；CustomVoice 反之
+        "needs_ref_audio": "clone" in MODES and "preset" not in MODES,
         "presets": _presets,
     }
 
@@ -110,28 +119,35 @@ def synthesize(req: SynthRequest):
 
     try:
         if req.mode == "clone":
-            if not req.ref_audio_path or not os.path.exists(req.ref_audio_path):
-                raise HTTPException(400, f"參考音檔不存在：{req.ref_audio_path}")
-            try:
-                wavs, sr = model.generate_voice_clone(
-                    text=req.text,
-                    language=language,
-                    ref_audio=req.ref_audio_path,
-                    ref_text=req.ref_text,
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
+            if "clone" not in MODES:
                 raise HTTPException(
                     400,
-                    "Qwen3-TTS-CustomVoice 這個 checkpoint 不支援上傳音檔克隆"
-                    f"（底層錯誤：{e}）。請改用 cosyvoice2 / fun-cosyvoice3 / voxcpm2，"
-                    "或改掛 Qwen3-TTS-12Hz-1.7B-Base 重 build。",
+                    f"這個 checkpoint（{MODEL_PATH}）沒有宣告 clone 能力。"
+                    "要上傳音檔克隆請把 Dockerfile 的 MODEL_REPO 換成 "
+                    "Qwen/Qwen3-TTS-12Hz-1.7B-Base、ENGINE_MODES 設成 clone 重 build，"
+                    "或改用 cosyvoice2 / fun-cosyvoice3 / voxcpm2。",
                 )
+            if not req.ref_audio_path or not os.path.exists(req.ref_audio_path):
+                raise HTTPException(400, f"參考音檔不存在：{req.ref_audio_path}")
+            # 註：generate_voice_clone 沒有 instruct 參數，所以 clone 模式下
+            # 語氣指令（gateway 的 instructions）拿不到，只有 preset 模式吃得到。
+            wavs, sr = model.generate_voice_clone(
+                text=req.text,
+                language=language,
+                ref_audio=req.ref_audio_path,
+                ref_text=req.ref_text,
+            )
         else:
-            speaker = req.speaker or DEFAULT_SPEAKER
             supported = model.get_supported_speakers() or []
-            if supported and speaker not in supported:
+            if not supported:
+                raise HTTPException(
+                    400,
+                    f"這個 checkpoint（{MODEL_PATH}）沒有內建音色，不能用 mode=preset。"
+                    "內建音色是 Qwen3-TTS-12Hz-1.7B-CustomVoice 才有的；"
+                    "目前這包請上傳參考音檔走 clone（POST /v1/voices）。",
+                )
+            speaker = req.speaker or DEFAULT_SPEAKER
+            if speaker not in supported:
                 raise HTTPException(
                     400, f"speaker「{speaker}」不在支援清單，可用的有：{supported}"
                 )

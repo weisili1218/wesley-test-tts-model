@@ -1,13 +1,17 @@
-# Qwen3-TTS-12Hz-1.7B-CustomVoice — 部署到 DGX Spark / GB10
+# Qwen3-TTS-12Hz-1.7B-Base — 部署到 DGX Spark / GB10
 
-四包裡唯一開箱即用的：內建 9 個精選音色，不用準備任何參考音檔。
+上傳一段參考音檔就能克隆音色，跟另外三包一樣。
+
+> **這一包以前掛的是 CustomVoice checkpoint**（內建 9 個精選音色、不能克隆）。
+> 現在換成 Base 換取克隆能力 —— 兩者只能二選一，Base **沒有**內建音色。
+> 要換回去見文末「換模型」。
 
 **這是一包完全獨立的部署單元**：一顆引擎 + 一個自己的 gateway，跟 `models/` 底下
 另外三包零依賴。整個資料夾複製到別台機器就能單獨跑，不用管其他模型。
 
 - 對外入口： `http://localhost:18003`
 - 引擎除錯用： `http://localhost:18083`（正常不用碰）
-- HF repo： `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`
+- HF repo： `Qwen/Qwen3-TTS-12Hz-1.7B-Base`
 
 ---
 
@@ -50,23 +54,28 @@ gateway。`gateway/app.py` 四包完全一樣，不寫死引擎名稱 —— 掛
 
 ## 這顆模型能做什麼
 
-| | Qwen3-TTS-12Hz-1.7B-CustomVoice |
+| | Qwen3-TTS-12Hz-1.7B-Base |
 |---|---|
-| HF repo | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` |
+| HF repo | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` |
 | 參數量 | 1.7B |
 | 輸出取樣率 | 24 kHz |
-| 上傳音檔克隆（clone） | ❌ |
+| 上傳音檔克隆（clone） | ✅ |
 | 純文字描述造音色（design） | ❌ |
-| 內建精選音色（preset） | ✅ 9 個 |
+| 內建精選音色（preset） | ❌ |
 | 引擎的 default 模式（不靠任何音色資料發聲） | ❌ |
-| 語氣／風格指令（`instructions`） | ✅ |
+| 語氣／風格指令（`instructions`） | ❌ 克隆路徑沒有這個參數，會被忽略 |
 | `speed` 參數 | ❌ 會被忽略 |
 
-**合成時不給 `voice` 會怎樣：** 自動挑**第一個內建音色**，所以什麼都不設定也合得出來。
+**合成時不給 `voice` 會怎樣：** 挑**最近建立的克隆音色**。音色庫是空的就回 **400**。
 
-**什麼時候選這顆：** 不想準備參考音檔、只要現成的好聲音；或想先跑通整條流程再處理音色。
+**什麼時候選這顆：** 要複製特定人的聲音，而且想留在 Qwen 這條線上（transformers 4.57.3，跟 CosyVoice 那兩顆的 4.51.3 互斥）。
 
-**起來之後第一件事：** 這顆**開箱即用**，build 完起來就能合成，不用先建音色。`./voice.sh list` 看內建那 9 個。
+**起來之後第一件事：** 這顆**沒有內建音色**，一定要先 `./voice.sh add` 建一個，不然合成會回 400。
+
+> **`instructions` 在這顆失效了。** `generate_voice_clone()` 只吃 `text` / `language` /
+> `ref_audio` / `ref_text`，沒有 `instruct` 參數 —— 語氣控制是 CustomVoice 那條路才有的。
+> 要「同一個音色換語氣」請用 `voxcpm2`（把描述併成 prefix）或 `fun-cosyvoice3`
+> （走 `inference_instruct2`）。
 
 ---
 
@@ -257,7 +266,7 @@ DOCKER_BUILDKIT=1 docker compose build engine     # 慢的是這個
 | apt + venv | 1-2 分 | Ubuntu 24.04 內建 Python 3.12，不用 conda |
 | pip install torch | 5-15 分 | torch + torchaudio + `nvidia-*-cu13`，約 6 GB |
 | pip install 其他相依 | 5-15 分 | 看 `engine/requirements.txt` |
-| 下載模型權重 | 5-20 分 | 從 HF 抓 `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` |
+| 下載模型權重 | 5-20 分 | 從 HF 抓 `Qwen/Qwen3-TTS-12Hz-1.7B-Base` |
 | 冒煙測試 | <1 分 | build 階段就 import 一次，壞掉不會產出壞 image |
 
 `engine/Dockerfile` 最後有冒煙測試，build log 尾巴應該看到：
@@ -268,7 +277,7 @@ transformers 4.57.3
 qwen-tts import OK
 ```
 
-想換成會克隆的 checkpoint：把 `MODEL_REPO` 改成 `Qwen/Qwen3-TTS-12Hz-1.7B-Base`，並在 compose 的 engine 加 `ENGINE_MODES: "preset,clone"`。
+想換回內建音色的 checkpoint：見文末「換模型」。
 
 ---
 
@@ -308,24 +317,56 @@ curl -s http://localhost:18003/v1/models | python3 -m json.tool
 
 ## Step 6 — 音色
 
-這顆只有 **preset**（內建、唯讀）音色，不能上傳克隆、也不能用文字描述造音色，
-所以 `voice.sh` 只有 `list` / `show` / `preview` 三條。
+這顆只有 **clone**（上傳參考音檔）音色，沒有內建音色、也不能用文字描述造音色。
+**這是起服務後的第一件事** —— 音色庫是空的時候合成一律 400。
+
+建音色的 API 是 `POST /v1/voices`，**回應裡的 `voice.id` 就是之後要拿來合成的東西**，
+不要自己編一個名字往下用：
 
 ```bash
-./voice.sh list                                  # 看 9 個內建音色
-./voice.sh preview preset_qwen3-tts_Vivian "這是試聽的句子。"   # → work/results/preview.wav
+# 建立。<名稱> 隨你取，只是給人看的標籤
+./voice.sh add "<名稱>" ~/ref.wav "這段參考音檔講的內容逐字打出來"
 ```
 
-合成的時候 `voice` 直接給 speaker 名字就好（例如 `Vivian`），gateway 會自己對應：
+回應長這樣，`id` 是 gateway 產的（`voice_` + 12 碼 hex），記下它：
+
+```json
+{"voice": {"id": "voice_a1b2c3d4e5f6", "name": "<名稱>", "type": "clone",
+           "duration_sec": 8.3, "compatible_engines": ["qwen3-tts"]}, "warnings": []}
+```
+
+腳本裡就把它接起來，不要寫死：
 
 ```bash
-./synth.sh "今天天氣真好。" Vivian
+VOICE_ID=$(./voice.sh add "<名稱>" ~/ref.wav "<逐字稿>" \
+           | python3 -c 'import json,sys; print(json.load(sys.stdin)["voice"]["id"])')
+
+./voice.sh list                                  # 隨時可以回頭查有哪些
+./voice.sh preview "$VOICE_ID" "這是試聽的句子。"   # → work/results/preview.wav
 ```
 
-不給 `voice` 的話會自動挑第一個內建音色。
+參考音檔的要求（gateway 會用 ffmpeg 轉成 16k 單聲道 16-bit wav）：
 
-> 想要「上傳三秒音檔就克隆」的話，這個 CustomVoice checkpoint 做不到 —— 換成
-> `Qwen/Qwen3-TTS-12Hz-1.7B-Base` 重 build，見最後的「換模型」。
+| | |
+|---|---|
+| 格式 | 任意（wav / mp3 / m4a / flac...）|
+| 長度 | 建議 **5-15 秒**。**< 2 秒直接 400**，> 30 秒過關但回 warning |
+| 內容 | 乾淨人聲，沒有背景音樂、沒有第二個人講話 |
+| 逐字稿 | **請務必給** —— Qwen 的 `generate_voice_clone` 會拿 `ref_text` 去對齊參考音檔，不給相似度明顯掉。忘了填可以 `./voice.sh transcript <id> "..."` 補 |
+
+合成的時候 `voice` 填剛剛拿到的 `$VOICE_ID`：
+
+```bash
+./synth.sh "今天天氣真好。" "$VOICE_ID"
+```
+
+填 `add` 當初給的**名稱**也行（gateway 的 `_resolve_voice` 會查），但**撞名會回 400**
+叫你改用 id —— 所以自動化腳本一律用 id，名稱只留給人手動打。
+
+不給 `voice` 的話會自動挑**最近建立的**克隆音色。
+
+> 音色庫跟另外三包共用格式。已經在 `cosyvoice2` 或 `voxcpm2` 建好的音色，
+> 直接 `cp -r ../cosyvoice2/work/voices/. work/voices/` 就能拿來用。
 
 
 音色實際存在 `work/voices/`：`voices.json` 是索引，`<voice_id>.wav` 是正規化後的
@@ -338,35 +379,36 @@ curl -s http://localhost:18003/v1/models | python3 -m json.tool
 ### 指令包裝
 
 ```bash
-./synth.sh "歡迎使用語音合成服務。"                      # 用預設內建音色
-./synth.sh "歡迎使用語音合成服務。" Ethan                # 換一個內建音色
-./synth.sh "歡迎使用語音合成服務。" Vivian out-001.wav   # 指定輸出檔名
+./synth.sh "歡迎使用語音合成服務。"                            # 用最近建立的克隆音色
+./synth.sh "歡迎使用語音合成服務。" "$VOICE_ID"                 # 指定音色
+./synth.sh "歡迎使用語音合成服務。" "$VOICE_ID" out-001.wav     # 指定輸出檔名
 # → work/results/
 ```
 
 ### OpenAI 相容 API
 
 ```bash
+# $VOICE_ID 就是 POST /v1/voices 回傳的 voice.id（voice_xxxxxxxxxxxx），見 Step 6
 curl -X POST http://localhost:18003/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{
-        "model": "qwen3-tts",
-        "input": "冷氣團南下，北部轉涼。",
-        "voice": "Vivian",
-        "instructions": "用平穩的新聞播報語氣",
-        "response_format": "wav"
-      }' \
+  -d "{
+        \"model\": \"qwen3-tts\",
+        \"input\": \"冷氣團南下，北部轉涼。\",
+        \"voice\": \"$VOICE_ID\",
+        \"language\": \"Chinese\",
+        \"response_format\": \"wav\"
+      }" \
   --output speech.wav
 ```
 
 | 欄位 | 說明 |
 |---|---|
 | `model` | 這一包只有 `qwen3-tts`。也接受 `tts-1` / `tts-1-hd` / `gpt-4o-mini-tts`，都會對應到它 |
-| `voice` | 內建 speaker 名稱，例如 `Vivian`。不給就自動挑第一個 |
-| `instructions` | 語氣指示。這顆吃 |
+| `voice` | 克隆音色的名稱或 voice id。不給就挑最近建立的；音色庫空的 → 400 |
+| `instructions` | ❌ 會被忽略。`generate_voice_clone` 沒有這個參數 |
 | `response_format` | `wav` / `mp3` / `flac` / `opus` / `aac`，非 wav 由 gateway 用 ffmpeg 轉 |
 | `speed` | ❌ 會被忽略 |
-| `language` | 選填，不給就讓模型自己判斷 |
+| `language` | 選填，不給就 `Auto` 讓模型自己判斷。**官方建議明講**（`Chinese` / `English` / ...）克隆品質比較穩 |
 
 回應的 header 會標明實際用了什麼：`X-Engine`、`X-Voice-Id`、`X-Voice-Type`。
 
@@ -377,7 +419,14 @@ from openai import OpenAI
 # 在 GB10 上跑就用 localhost；從別台機器連的話，服務要先用
 # BIND_ADDR=0.0.0.0 docker compose up -d 起來，這裡再換成 http://gb10:18003/v1
 client = OpenAI(base_url="http://localhost:18003/v1", api_key="不檢查的話隨便填")
-client.audio.speech.create(model="qwen3-tts", voice="Vivian",
+
+# 音色是自己建的，所以 voice 不是常數 —— 從音色 API 拿。建立時 POST /v1/voices
+# 的回應裡有 voice.id，之後也可以隨時用 GET /v1/voices 查回來。
+import httpx
+voices = httpx.get("http://localhost:18003/v1/voices").json()["data"]
+voice_id = voices[0]["id"]          # 或 next(v["id"] for v in voices if v["name"] == 名稱)
+
+client.audio.speech.create(model="qwen3-tts", voice=voice_id,
                            input="測試一下。").stream_to_file("out.wav")
 ```
 
@@ -390,10 +439,14 @@ client.audio.speech.create(model="qwen3-tts", voice="Vivian",
 
 ```csv
 text,output,voice,instruct
-今天天氣真好，適合出門走走。,out-001,Vivian,
-下週三下午三點開會，請準時參加。,out-002,Ethan,
-歡迎收聽本集節目，我是主持人。,out-003,Vivian,用開朗一點的語氣說
+今天天氣真好，適合出門走走。,out-001,,
+下週三下午三點開會，請準時參加。,out-002,,
+歡迎收聽本集節目，我是主持人。,out-003,voice_a1b2c3d4e5f6,
 ```
+
+- `voice` **留空**就用最近建立的克隆音色，整批同一個聲音時這樣最省事；
+  要指定就填 `POST /v1/voices` 回傳的 id（上面第三列），或整批用 `--voice "$VOICE_ID"` 蓋掉
+- `instruct` 欄位留著是為了跟另外三包的 CSV 格式一致，**這一包填了不會有作用**
 
 - `text` 和 `output` 必填，其他可省略
 - `output` 不用寫副檔名，會自己補
@@ -403,7 +456,7 @@ text,output,voice,instruct
 ```bash
 python3 scripts/batch.py work/data/batch.csv
 python3 scripts/batch.py work/data/batch.csv --format mp3
-python3 scripts/batch.py work/data/batch.csv --voice Vivian
+python3 scripts/batch.py work/data/batch.csv --voice "$VOICE_ID"   # 整批蓋成同一個音色
 ```
 
 `scripts/batch.py` 只用 Python 標準函式庫，直接跑就好，不用建 venv。
@@ -424,20 +477,20 @@ python3 scripts/batch.py work/data/batch.csv --voice Vivian
 | POST | `/v1/warmup` | 主動把模型載進 GPU | ✅ |
 | POST | `/v1/audio/speech` | 合成（OpenAI 相容） | ✅ |
 | GET | `/v1/voices` | 列音色，可加 `?type=` | ✅ |
-| POST | `/v1/voices` | 上傳參考音檔建立 clone 音色（multipart） | ❌ 不支援 |
+| POST | `/v1/voices` | 上傳參考音檔建立 clone 音色（multipart） | ✅ **回傳的 `voice.id` 就是合成要用的** |
 | POST | `/v1/voices/design` | 用文字描述建立 design 音色（JSON） | ❌ 不支援 |
 | GET | `/v1/voices/{id}` | 單一音色 | ✅ |
-| PATCH | `/v1/voices/{id}` | 改名 / 補逐字稿 | ❌ 不支援 |
-| DELETE | `/v1/voices/{id}` | 刪除，連 wav 一起 | ❌ 不支援 |
+| PATCH | `/v1/voices/{id}` | 改名 / 補逐字稿 | ✅ |
+| DELETE | `/v1/voices/{id}` | 刪除，連 wav 一起 | ✅ |
 | POST | `/v1/voices/{id}/preview` | 試聽，可加 `?text=` | ✅ |
 
 互動式文件在 `http://localhost:18003/docs`。
 
-> 標成「不支援」的那幾條路由還是存在（gateway 四包共用同一份 app.py），
+> 標成「不支援」的那條路由還是存在（gateway 四包共用同一份 app.py），
 > 只是這顆引擎沒有對應能力，打了會回 400 並附上人看得懂的原因，不會是空白的 500。
 >
-> 這顆只吃內建 `preset`，`POST /v1/voices` 建出來的 clone 音色在這裡用不了。
-> 要克隆請改用 fun-cosyvoice3 那一包。
+> 這顆只吃 `clone` 音色。內建 `preset` 音色是 CustomVoice checkpoint 才有的，
+> 這包換成 Base 之後 `/v1/voices` 不會再列出任何 preset。
 
 **要加保護**就在 `compose.yaml` 的 gateway 設 `API_KEY`，之後所有 `/v1/*` 都要帶
 `Authorization: Bearer <key>`（`/healthz` 不用）。腳本則設環境變數：
@@ -463,8 +516,12 @@ export TTS_API_KEY=sk-xxxx
 | build 到一半磁碟滿了 | **共用主機請勿用 `docker system prune -af --volumes`** —— `-a` 會刪掉別人停用中容器的 image、`--volumes` 會刪掉別人的資料 volume。改用只清 build cache 的 `docker builder prune`，或指名 `docker image rm <ID>`。再確認空間（見 preflight 第 5 項） |
 | port 已經被佔用 | 四包的 port 刻意錯開（gateway 18001-18004、引擎 18081-18084）。真的撞到就改 compose 的 `ports` |
 | `voices.json 解析失敗` | 檔案壞了，gateway 會先備份成 `voices.broken-<時間>.json` 再報錯，可以手動修 |
-| `音色「X」（clone 型別）不能用在引擎 qwen3-tts` | 這顆只吃內建 preset 音色。`./voice.sh list` 挑一個，或換去 fun-cosyvoice3 那包 |
-| `speed` 設了沒反應 | 正常，這顆會忽略 `speed`。要調語速改用 `instructions` 描述 |
+| `qwen3-tts 需要一個參考音檔音色，但音色庫是空的`（400） | Base 沒有內建音色。先 `./voice.sh add "<名稱>" <音檔> "<逐字稿>"` |
+| `找不到音色「X」`（404） | `voice` 填錯了。用 `./voice.sh list` 查 `POST /v1/voices` 當初回的 id |
+| `音色「X」... 撞名`（400） | 兩個音色同名。改用 voice id，別用名稱 |
+| 克隆出來不像 | 九成是**沒給逐字稿**。`./voice.sh show <id>` 看 `transcript` 是不是空的，空的就 `./voice.sh transcript <id> "..."` 補。再來是參考音檔太短／有雜音／有第二個人聲 |
+| `speed` / `instructions` 設了沒反應 | 正常，這顆兩個都忽略。`generate_voice_clone` 只吃 text / language / ref_audio / ref_text |
+| `這個 checkpoint ... 沒有內建音色，不能用 mode=preset`（400） | 你直接戳引擎且帶了 `mode=preset`。Base 沒有 preset，改 `mode=clone` |
 
 ---
 
@@ -493,11 +550,27 @@ docker system df              # 先看看各類佔多少
 tar czf voices-backup-$(date +%F).tar.gz work/voices/
 ```
 
-**換模型**：改 `engine/Dockerfile` 的 `ARG MODEL_REPO` 再重 build，其他三包完全不受影響：
+**換模型**：改 `engine/Dockerfile` 的 `ARG MODEL_REPO` 再重 build，其他三包完全不受影響。
+**`MODEL_REPO` 跟 `ENGINE_MODES` 一定要一起改**，兩者不一致的話 gateway 會照錯的能力
+路由過來，合成才在引擎裡爆掉：
+
+| checkpoint | `ENGINE_MODES` | 能力 |
+|---|---|---|
+| `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | `clone` | 上傳音檔克隆，**沒有**內建音色（目前這個）|
+| `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | `preset` | 9 個內建精選音色 + `instructions` 語氣控制，**不會**克隆 |
+
+`engine/server.py` 兩種 mode 都實作了，換 checkpoint 不用改程式。要換回 CustomVoice：
 
 ```bash
-docker compose build --build-arg MODEL_REPO=<新的 HF repo> engine
+# 1. engine/Dockerfile：ARG MODEL_REPO 改成 ...-CustomVoice，ENV ENGINE_MODES 改成 preset
+# 2. gateway/app.py 的 FALLBACK_MODES["qwen3-tts"] 改回 ["preset"]（引擎連不上時才會用到）
+#    改完四包同步：for d in ../*/gateway; do cp gateway/app.py "$d/app.py"; done
+# 3. 重 build
+docker compose build engine && docker compose up -d
+curl -X POST http://localhost:18003/v1/warmup    # preset 清單要 warmup 後才看得到
 ```
+
+`--build-arg` 只蓋得掉 `ARG MODEL_REPO`，蓋不掉 `ENV ENGINE_MODES`，所以別只下這行就以為換好了。
 
 **改 gateway**：`gateway/app.py` 四包一模一樣。改完記得同步：
 
