@@ -1,1 +1,7 @@
 .DS_Store
+.env
+compose.override.yaml
+build.log
+**/work/results/*.wav
+__pycache__/
+*.pyc
