@@ -105,7 +105,7 @@ shutil.copytree(snapshot_download('${MODEL_REPO}'), '/models/fun-cosyvoice3', \
 COPY server.py /opt/server/server.py
 
 # --- 冒煙測試 ----------------------------------------------------------------
-# 原本只驗 import，但這條路徑上有三個坑是「build 過得了、載模型才炸」的，
+# 原本只驗 import，但這條路徑上有四個坑是「build 過得了、載模型才炸」的，
 # 那代表要先燒掉 30-60 分鐘 build 才會發現。以下把它們全部提前到 build 階段：
 #
 #   ① pkg_resources  ── setuptools 81+ 移除了它，而 flow_matching → matcha →
@@ -116,6 +116,10 @@ COPY server.py /opt/server/server.py
 #                       （load_wav 讀參考音檔），但 save 不能用：torchcodec 忽略
 #                       format 參數、改看副檔名，寫進 BytesIO 會失敗，所以
 #                       server.py 的輸出改用 soundfile。這裡測的就是這兩條路徑。
+#   ④ pyarrow       ── 模型設定 cosyvoice.yaml 有 !name: 指向
+#                       cosyvoice.dataset.processor，hyperpyyaml 用 pydoc.locate
+#                       動態載入它，而它 module-level import pyarrow.parquet。
+#                       import CosyVoice3 這個類別抓不到，要 import 到那支模組才會。
 RUN python -c "\
 import torch, onnxruntime, torchaudio, whisper, pkg_resources; \
 from wetext import Normalizer; \
@@ -127,7 +131,8 @@ print('wetext OK')" \
  && python -c "\
 from cosyvoice.cli.cosyvoice import CosyVoice3; \
 from cosyvoice.flow.flow_matching import ConditionalCFM; \
-print('CosyVoice3 + flow_matching(matcha/lightning 鏈) OK')" \
+import cosyvoice.dataset.processor; \
+print('CosyVoice3 + flow_matching(matcha/lightning 鏈) + dataset.processor OK')" \
  && python -c "\
 import ruamel.yaml; from hyperpyyaml import load_hyperpyyaml; \
 assert load_hyperpyyaml('a: 1') == {'a': 1}; \

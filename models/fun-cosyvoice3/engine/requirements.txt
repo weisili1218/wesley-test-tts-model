@@ -76,6 +76,12 @@ modelscope==1.20.0
 gdown==6.1.0
 wget==3.2
 
+# --- 載模型時才會被 import 到（冒煙測試的 import CosyVoice3 抓不到）
+# 模型設定 cosyvoice.yaml 裡有 !name: 指向 cosyvoice.dataset.processor 的欄位，
+# hyperpyyaml 解析時用 pydoc.locate 動態載入那支模組，而它 module-level
+# import pyarrow.parquet。整條路徑只有在 CosyVoice3(model_dir) 實際讀設定時才會走到。
+pyarrow==25.0.1
+
 # --- engine HTTP server
 fastapi==0.115.6
 uvicorn[standard]==0.30.0
