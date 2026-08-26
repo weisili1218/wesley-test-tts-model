@@ -19,8 +19,8 @@ import io
 import os
 import logging
 
+import soundfile as sf
 import torch
-import torchaudio
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -132,7 +132,16 @@ def synthesize(req: SynthRequest):
 
     speech = torch.concat(chunks, dim=1)
     buf = io.BytesIO()
-    torchaudio.save(buf, speech, model.sample_rate, format="wav")
+    # 不能用 torchaudio.save：2.11 把 save 委派給 torchcodec 之後，format 參數被
+    # 忽略、改由副檔名決定，寫進沒有副檔名的 BytesIO 會 Couldn't allocate
+    # AVFormatContext。soundfile 支援 file-like 物件，qwen3-tts / voxcpm2 也是這樣寫。
+    sf.write(
+        buf,
+        speech.squeeze(0).cpu().numpy(),
+        model.sample_rate,
+        format="WAV",
+        subtype="PCM_16",
+    )
     return Response(
         content=buf.getvalue(),
         media_type="audio/wav",

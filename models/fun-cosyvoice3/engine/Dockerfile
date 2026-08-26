@@ -112,8 +112,10 @@ COPY server.py /opt/server/server.py
 #                       pylogger → lightning 這條鏈需要它
 #   ② ruamel.yaml    ── 0.19 的 max_depth 檢查會打死 HyperPyYAML 的 legacy Loader，
 #                       而 CosyVoice3.__init__ 一開始就呼叫 load_hyperpyyaml
-#   ③ torchcodec     ── torchaudio 2.11 的 load/save 全部委派給它，且會忽略
-#                       原始碼指定的 backend='soundfile'
+#   ③ torchcodec     ── torchaudio 2.11 的 load/save 全部委派給它。load 照走
+#                       （load_wav 讀參考音檔），但 save 不能用：torchcodec 忽略
+#                       format 參數、改看副檔名，寫進 BytesIO 會失敗，所以
+#                       server.py 的輸出改用 soundfile。這裡測的就是這兩條路徑。
 RUN python -c "\
 import torch, onnxruntime, torchaudio, whisper, pkg_resources; \
 from wetext import Normalizer; \
@@ -131,12 +133,14 @@ import ruamel.yaml; from hyperpyyaml import load_hyperpyyaml; \
 assert load_hyperpyyaml('a: 1') == {'a': 1}; \
 print('hyperpyyaml OK / ruamel', ruamel.yaml.version_info)" \
  && python -c "\
-import io, torch, torchaudio, torchcodec; \
-sr = 22050; w = torch.zeros(1, sr); \
-b = io.BytesIO(); torchaudio.save(b, w, sr, format='wav'); b.seek(0); \
-w2, sr2 = torchaudio.load(b); \
-assert w2.shape == w.shape and sr2 == sr, (w2.shape, sr2); \
-print('torchcodec', torchcodec.__version__, '/ torchaudio load+save OK')"
+import io, numpy as np, soundfile as sf, torchaudio, torchcodec; \
+sr = 22050; w = np.zeros(sr, dtype='float32'); \
+b = io.BytesIO(); sf.write(b, w, sr, format='WAV', subtype='PCM_16'); \
+open('/tmp/smoke.wav', 'wb').write(b.getvalue()); \
+w2, sr2 = torchaudio.load('/tmp/smoke.wav'); \
+assert w2.shape[-1] == sr and sr2 == sr, (w2.shape, sr2); \
+print('torchcodec', torchcodec.__version__, '/ sf.write(BytesIO) + torchaudio.load(path) OK')" \
+ && rm -f /tmp/smoke.wav
 
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
