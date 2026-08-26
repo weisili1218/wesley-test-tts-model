@@ -47,10 +47,19 @@ COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r /tmp/requirements.txt
 
-RUN --mount=type=cache,target=/root/.cache/pip pip install huggingface_hub \
-    && python -c "\
+# 權重先落在 cache mount 的 HF cache，再複製進 image，各包共用同一份 cache。
+# 不能直接寫 snapshot_download(local_dir=...) —— 帶了 local_dir 就會繞過 cache
+# （hub 0.36 的 docstring：the cache_dir will not be used），那樣每次這層失效
+# 都會重抓一次權重。copytree 的 symlinks=False 把 cache 裡指向 blobs/ 的符號
+# 連結解成實體檔案，所以 image 仍然自給自足，跑的時候不依賴 cache mount。
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=cache,id=hf-hub,target=/hf-cache,sharing=locked \
+    pip install huggingface_hub \
+    && HF_HUB_CACHE=/hf-cache python -c "\
+import shutil; \
 from huggingface_hub import snapshot_download; \
-snapshot_download('${MODEL_REPO}', local_dir='/models/voxcpm2')"
+shutil.copytree(snapshot_download('${MODEL_REPO}'), '/models/voxcpm2', \
+                symlinks=False, dirs_exist_ok=True)"
 
 COPY server.py /opt/server/server.py
 

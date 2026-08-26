@@ -69,7 +69,18 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r /tmp/requirements.txt
 
 # --- CosyVoice 原始碼（含 Matcha-TTS submodule）------------------------------
-RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/cosyvoice \
+# git 物件放在 cache mount 的 bare mirror 裡，凡是要 CosyVoice 原始碼的包共用同一份。
+# 這層的 layer cache 失效時（改了 requirements.txt、換了 COSYVOICE_REF）不會再從
+# GitHub 抓一次完整歷史，只做增量 fetch。mirror 是 build cache 的一部分，
+# 要回收就 docker builder prune。
+#
+# sharing=locked：同時 build 多包時會排隊，不會有兩個 build 同時寫這份 mirror。
+RUN --mount=type=cache,id=cosyvoice-git,target=/git-cache,sharing=locked \
+    { [ -d /git-cache/CosyVoice.git ] \
+        || git clone --mirror https://github.com/FunAudioLLM/CosyVoice.git \
+             /git-cache/CosyVoice.git; } \
+    && git -C /git-cache/CosyVoice.git fetch --prune \
+    && git clone /git-cache/CosyVoice.git /opt/cosyvoice \
     && cd /opt/cosyvoice \
     && git checkout "${COSYVOICE_REF}" \
     && git submodule update --init --recursive \
@@ -77,23 +88,38 @@ RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/cosy
 
 # --- 把權重烘進 image（之後就能完全離線跑）----------------------------------
 # 用 python API 而不是 huggingface-cli / hf，因為那兩個指令名稱在 hub 版本之間換過。
-RUN --mount=type=cache,target=/root/.cache/pip pip install huggingface_hub \
-    && python -c "\
+# 權重先落在 cache mount 的 HF cache，再複製進 image，各包共用同一份 cache。
+# 不能直接寫 snapshot_download(local_dir=...) —— 帶了 local_dir 就會繞過 cache
+# （hub 0.36 的 docstring：the cache_dir will not be used），那樣每次這層失效
+# 都會重抓一次權重。copytree 的 symlinks=False 把 cache 裡指向 blobs/ 的符號
+# 連結解成實體檔案，所以 image 仍然自給自足，跑的時候不依賴 cache mount。
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=cache,id=hf-hub,target=/hf-cache,sharing=locked \
+    pip install huggingface_hub \
+    && HF_HUB_CACHE=/hf-cache python -c "\
+import shutil; \
 from huggingface_hub import snapshot_download; \
-snapshot_download('${MODEL_REPO}', local_dir='/models/fun-cosyvoice3')"
+shutil.copytree(snapshot_download('${MODEL_REPO}'), '/models/fun-cosyvoice3', \
+                symlinks=False, dirs_exist_ok=True)"
 
 COPY server.py /opt/server/server.py
 
 # --- 冒煙測試 ----------------------------------------------------------------
-# 原本只驗 import，但這條路徑上有三個坑是「build 過得了、載模型才炸」的，
+# 原本只驗 import，但這條路徑上有四個坑是「build 過得了、載模型才炸」的，
 # 那代表要先燒掉 30-60 分鐘 build 才會發現。以下把它們全部提前到 build 階段：
 #
 #   ① pkg_resources  ── setuptools 81+ 移除了它，而 flow_matching → matcha →
 #                       pylogger → lightning 這條鏈需要它
 #   ② ruamel.yaml    ── 0.19 的 max_depth 檢查會打死 HyperPyYAML 的 legacy Loader，
 #                       而 CosyVoice3.__init__ 一開始就呼叫 load_hyperpyyaml
-#   ③ torchcodec     ── torchaudio 2.11 的 load/save 全部委派給它，且會忽略
-#                       原始碼指定的 backend='soundfile'
+#   ③ torchcodec     ── torchaudio 2.11 的 load/save 全部委派給它。load 照走
+#                       （load_wav 讀參考音檔），但 save 不能用：torchcodec 忽略
+#                       format 參數、改看副檔名，寫進 BytesIO 會失敗，所以
+#                       server.py 的輸出改用 soundfile。這裡測的就是這兩條路徑。
+#   ④ pyarrow       ── 模型設定 cosyvoice.yaml 有 !name: 指向
+#                       cosyvoice.dataset.processor，hyperpyyaml 用 pydoc.locate
+#                       動態載入它，而它 module-level import pyarrow.parquet。
+#                       import CosyVoice3 這個類別抓不到，要 import 到那支模組才會。
 RUN python -c "\
 import torch, onnxruntime, torchaudio, whisper, pkg_resources; \
 from wetext import Normalizer; \
@@ -105,18 +131,21 @@ print('wetext OK')" \
  && python -c "\
 from cosyvoice.cli.cosyvoice import CosyVoice3; \
 from cosyvoice.flow.flow_matching import ConditionalCFM; \
-print('CosyVoice3 + flow_matching(matcha/lightning 鏈) OK')" \
+import cosyvoice.dataset.processor; \
+print('CosyVoice3 + flow_matching(matcha/lightning 鏈) + dataset.processor OK')" \
  && python -c "\
 import ruamel.yaml; from hyperpyyaml import load_hyperpyyaml; \
 assert load_hyperpyyaml('a: 1') == {'a': 1}; \
 print('hyperpyyaml OK / ruamel', ruamel.yaml.version_info)" \
  && python -c "\
-import io, torch, torchaudio, torchcodec; \
-sr = 22050; w = torch.zeros(1, sr); \
-b = io.BytesIO(); torchaudio.save(b, w, sr, format='wav'); b.seek(0); \
-w2, sr2 = torchaudio.load(b); \
-assert w2.shape == w.shape and sr2 == sr, (w2.shape, sr2); \
-print('torchcodec', torchcodec.__version__, '/ torchaudio load+save OK')"
+import io, numpy as np, soundfile as sf, torchaudio, torchcodec; \
+sr = 22050; w = np.zeros(sr, dtype='float32'); \
+b = io.BytesIO(); sf.write(b, w, sr, format='WAV', subtype='PCM_16'); \
+open('/tmp/smoke.wav', 'wb').write(b.getvalue()); \
+w2, sr2 = torchaudio.load('/tmp/smoke.wav'); \
+assert w2.shape[-1] == sr and sr2 == sr, (w2.shape, sr2); \
+print('torchcodec', torchcodec.__version__, '/ sf.write(BytesIO) + torchaudio.load(path) OK')" \
+ && rm -f /tmp/smoke.wav
 
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \

@@ -3,5 +3,9 @@
 compose.override.yaml
 build.log
 **/work/results/*.wav
+# 音色庫：gateway 執行期寫入的參考音檔與索引，屬於各機器自己的資料。
+# work/voices/.gitkeep 要留著，掛載點的目錄結構靠它進版控。
+**/work/voices/*.wav
+**/work/voices/voices.json
 __pycache__/
 *.pyc
