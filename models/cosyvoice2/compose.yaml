@@ -70,6 +70,11 @@ services:
       # - "18081:8080"
     environment:
       NVIDIA_VISIBLE_DEVICES: all
+      # autocast(float16)。GB10 是 Blackwell sm_121，同機的 qwen3-tts 用的是 bfloat16，
+      # 但 CosyVoice 這條路徑只有開/關兩種，沒有 bf16 選項。預設開；如果聽到雜訊或
+      # 破音，改成 "0" 再 docker compose up -d engine 就能比對，不用重 build
+      # （server.py 的 get_model() 讀這個值）。
+      COSYVOICE_FP16: "1"
     volumes:
       # 音色庫。引擎只要讀得到 wav 就好，寫入是 gateway 的事。
       - ./work/voices:/voices:ro
