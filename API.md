@@ -91,6 +91,14 @@ Body 是 JSON，回 **audio binary**（不是 JSON）。
 | `response_format` | enum | `wav` | `wav` / `mp3` / `flac` / `opus` / `aac`。非 wav 由 gateway 用 ffmpeg 轉 |
 | `speed` | float | 1.0 | **只有 CosyVoice 那兩顆真的會用**，見下面的參數效力表 |
 | `language` | string\|null | null | **只有 qwen3-tts 會用**。不給則沿用音色上的 `language` |
+| `profile` | string\|null | null | **只有 qwen3-tts 會用**。`fast` / `balanced` / `quality`，只這一次生效 |
+| `temperature` / `top_p` / `top_k` / `repetition_penalty` | number\|null | null | **只有 qwen3-tts 會用**。蓋掉 profile 的對應欄位 |
+| `seed` | int\|null | null | **只有 qwen3-tts 會用**。固定住可重現同一次生成 |
+
+> 這五個生成參數欄位目前**只加在 qwen3-tts 那一包的 `gateway/app.py`**。
+> `models/*/gateway/app.py` 是四份各自獨立的檔案（不是 symlink），這次沒有同步過去。
+> 之後要同步也不會壞：其他三顆引擎的 `SynthRequest` 沒有這些欄位，pydantic 預設
+> 會忽略多餘欄位。
 
 回應 header：
 
@@ -216,6 +224,7 @@ query：`?type=clone|design|preset`、`?engine=<name>`（過濾 `compatible_engi
 | `instructions` | ✅ 走 `inference_instruct2`（**會蓋掉 zero-shot 路徑**） | ❌ 忽略（`generate_voice_clone` 沒這個參數）| ✅ 併成文字最前面的括號 prefix |
 | 音色 `description` | 與 `instructions` 合併成同一段風格文字 | 同左 | 同左（併進 prefix） |
 | `response_format` | gateway 統一用 ffmpeg 轉，四包一致 | 同左 | 同左 |
+| `profile` / `temperature` / `top_p` / `top_k` / `repetition_penalty` / `seed` | ❌ 忽略 | ✅ 傳進 `model.generate` 的 kwargs，見該包 DEPLOY.md 的「生成參數」 | ❌ 忽略 |
 
 > **CosyVoice 的坑**：給了 `instructions` 就會走 instruct2，**不再走 zero-shot**，音色相似度會跟不給時不一樣。要最像原音就別給 `instructions`。
 
@@ -240,6 +249,13 @@ gateway 由 `_build_payload` 組出來，四顆共通欄位：
 
 ```
 text, mode, ref_audio_path, ref_text, description, instruct, speaker, language, speed
+```
+
+qwen3-tts 那一包的 gateway 還會把有值的生成參數一起放進來（`None` 的不放，
+讓引擎端的 profile 決定）：
+
+```
+profile, temperature, top_p, top_k, repetition_penalty, seed
 ```
 
 `mode` 決定帶哪幾個：
@@ -277,7 +293,7 @@ text, mode, ref_audio_path, ref_text, description, instruct, speaker, language, 
 |---|---|
 | 共通 | `ENGINE_NAME`、`MODEL_PATH`、`ENGINE_MODES` |
 | cosyvoice ×2 | `COSYVOICE_CLASS`（`CosyVoice2`/`CosyVoice3`）、`COSYVOICE_FP16` |
-| qwen3-tts | `QWEN_ATTN`（預設 `sdpa`，aarch64 上唯一免現場編譯的）、`QWEN_DTYPE`、`QWEN_DEFAULT_SPEAKER`（只有 CustomVoice checkpoint 用得到）|
+| qwen3-tts | `QWEN_ATTN`（預設 `sdpa`，aarch64 上唯一免現場編譯的）、`QWEN_DTYPE`、`QWEN_DEFAULT_SPEAKER`（只有 CustomVoice checkpoint 用得到）<br>生成參數：`QWEN_PROFILE`（`fast`/`balanced`/`quality`，預設 `balanced`）、`QWEN_TEMPERATURE`、`QWEN_TOP_P`、`QWEN_TOP_K`、`QWEN_REPETITION_PENALTY`、`QWEN_SPLIT_MAX_CHARS`、`QWEN_RETRIES`、`QWEN_SEED`（後七個不設 = 照 profile 走）<br>效能：`QWEN_MAX_NEW_TOKENS_CAP`（2048）、`QWEN_PROMPT_CACHE_SIZE`（32）、`QWEN_MAX_BATCH`（8）、`QWEN_JOIN_SILENCE_MS`（120）|
 | voxcpm2 | `VOXCPM_OPTIMIZE`（torch.compile，預設關）、`VOXCPM_CFG`、`VOXCPM_TIMESTEPS` |
 
 > `ENGINE_MODES` 是 gateway 路由的依據，gateway **不寫死**任何引擎能力。

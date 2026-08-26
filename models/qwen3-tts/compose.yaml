@@ -38,8 +38,12 @@ services:
     mem_limit: 4g                    # gateway 不吃 GPU，image <200MB，4g 綽綽有餘
     ports:
       # 預設只綁 localhost，機器上的其他人／同網段連不到。
-      # 要從別台機器連： BIND_ADDR=0.0.0.0 docker compose up -d
-      # （對外開放的話請一併把下面的 API_KEY 打開）
+      # 要從別台機器（例如自己的筆電）打這台 GB10 的 API：
+      #
+      #   BIND_ADDR=0.0.0.0 API_KEY=sk-隨便打一串 docker compose up -d
+      #
+      # 綁 0.0.0.0 等於整個同網段都連得到，**請務必同時設 API_KEY**，
+      # 不然任何人都能用你的 GPU 合成語音、讀寫你的音色庫。
       - "${BIND_ADDR:-127.0.0.1}:18003:8000"
     volumes:
       - ./work/voices:/voices          # 這裡要可寫，音色就存在這
@@ -47,7 +51,9 @@ services:
       ENGINES: "qwen3-tts=http://engine:8080"
       DEFAULT_ENGINE: qwen3-tts
       REQUEST_TIMEOUT: "600"
-      # API_KEY: "sk-xxxx"             # 設了就會檢查 Authorization: Bearer
+      # 設了就會檢查 Authorization: Bearer。空字串 = 不檢查（只綁 localhost 時的預設）。
+      # 從 shell 帶進來就好，不用改這個檔： API_KEY=sk-xxxx docker compose up -d
+      API_KEY: "${API_KEY:-}"
     depends_on:
       - engine
 
@@ -76,6 +82,22 @@ services:
       # - "18083:8080"
     environment:
       NVIDIA_VISIBLE_DEVICES: all
+      # 生成參數。這裡設的會蓋掉 Dockerfile 的 ENV，所以調參**不用重 build**，
+      # 改完 `docker compose up -d engine` 重啟就生效。
+      #
+      #   fast      快、最保守，斷句切得碎          （語調偏平）
+      #   balanced  預設                            （穩定度與表現力的折衷）
+      #   quality   少斷句、語調最連貫，壞掉會重生兩次（最慢）
+      # QWEN_PROFILE: balanced
+      #
+      # 單項覆蓋 profile（不設 = 照 profile 走）：
+      # QWEN_TEMPERATURE: "0.8"          # 越低越穩，破音／亂唸就往下調
+      # QWEN_REPETITION_PENALTY: "1.1"   # 整段重複唸同一個詞就往上調
+      # QWEN_SPLIT_MAX_CHARS: "120"      # 長文斷句的每段字數上限
+      # QWEN_RETRIES: "1"                # 產出明顯不對時換 seed 重生幾次
+      # QWEN_SEED: "1234"                # 固定 seed，同一句話每次都一樣
+      #
+      # QWEN_MAX_BATCH: "8"              # ⚠ 往上調會吃光 unified memory，見上面 mem_limit 那段
     volumes:
       # 音色庫。引擎只要讀得到 wav 就好，寫入是 gateway 的事。
       - ./work/voices:/voices:ro
