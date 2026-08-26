@@ -14,6 +14,9 @@ CosyVoice engine HTTP server（CosyVoice2 / Fun-CosyVoice3 共用同一份程式
   MODEL_PATH      模型權重目錄
   COSYVOICE_CLASS CosyVoice2 或 CosyVoice3
   COSYVOICE_FP16  1 = 用 fp16（有 CUDA 時預設開）
+  COSYVOICE3_SYSTEM_PROMPT
+                  只有 CosyVoice3 用得到。接在 <|endofprompt|> 前面的 system prompt，
+                  預設跟官方 model card 一致
 """
 import io
 import os
@@ -36,6 +39,26 @@ CLASS_NAME = os.environ.get("COSYVOICE_CLASS", "CosyVoice3")
 
 # 對外宣告支援哪些音色來源，gateway 靠這個決定路由。
 MODES = [m.strip() for m in os.environ.get("ENGINE_MODES", "clone").split(",") if m.strip()]
+
+# CosyVoice3 的 LLM 硬性要求輸入裡有 <|endofprompt|>（token 151646）：
+#   cosyvoice/llm/llm.py:479   assert 151646 in text
+# 沒有的話 AssertionError 會在 llm_job 那條執行緒炸掉（cli/model.py:121），主執行緒
+# p.join() 之後拿到空的 speech token list，flow 產出 0 幀 mel，最後表現成 HiFi-GAN 的
+#   RuntimeError: Calculated padded input size per channel: (3). Kernel size: (4).
+# 那個 3 是 f0_predictor 第一層 CausalConv1d(kernel=4) 的 causal padding
+# （transformer/convolution.py:177），不是 mel 長度 —— mel 長度是 0，所以不管輸入
+# 幾個字都會看到同一個 3。
+#
+# 前綴要掛在哪個參數上，三條路徑各不相同，照官方 model card 的 Basic Usage：
+#   zero_shot      → prompt_text 前面
+#   cross_lingual  → tts_text 前面（frontend 會把 prompt_text 整個刪掉）
+#   instruct2      → instruct_text 結尾
+#
+# CosyVoice2 走的是 Qwen2LM，沒有這個檢查，也沒有用這種輸入訓練過，注入只會多出
+# 無意義的 text token，所以要用 COSYVOICE_CLASS 擋住。
+EOP = "<|endofprompt|>"
+SYSTEM_PROMPT = os.environ.get("COSYVOICE3_SYSTEM_PROMPT", "You are a helpful assistant.")
+IS_CV3 = CLASS_NAME == "CosyVoice3"
 
 app = FastAPI(title=f"{ENGINE_NAME} engine")
 _model = None
@@ -111,20 +134,41 @@ def synthesize(req: SynthRequest):
     try:
         if style:
             # 有風格指示 → instruct2（CosyVoice2/3 才有）
+            instruct = f"{SYSTEM_PROMPT} {style}{EOP}" if IS_CV3 else style
             it = model.inference_instruct2(
-                req.text, style, prompt_wav, stream=False, speed=req.speed
+                req.text, instruct, prompt_wav, stream=False, speed=req.speed
             )
+            chunks = [out["tts_speech"] for out in it]
         elif req.ref_text:
             # 有逐字稿 → zero-shot，音色相似度最好
+            ref_text = f"{SYSTEM_PROMPT}{EOP}{req.ref_text}" if IS_CV3 else req.ref_text
             it = model.inference_zero_shot(
-                req.text, req.ref_text, prompt_wav, stream=False, speed=req.speed
+                req.text, ref_text, prompt_wav, stream=False, speed=req.speed
             )
+            chunks = [out["tts_speech"] for out in it]
+        elif IS_CV3:
+            # 沒逐字稿 → cross-lingual（不需要逐字稿，但相似度略差）。
+            # 這條路徑的前綴只能掛在 tts_text 上，而 text_normalize 看到 <| |> 就會
+            # 整段跳過正規化「與斷句」（cli/frontend.py:130），長文會變成一整段丟給
+            # LLM，跟 zero-shot 路徑行為不一致。所以先用 frontend 自己的斷句切好，
+            # 再逐句掛前綴。切完的句子已含 <| |>，inference_cross_lingual 內部那次
+            # text_normalize 會原樣返回，不會重複處理。
+            sentences = model.frontend.text_normalize(
+                req.text, split=True, text_frontend=True
+            ) or [req.text]
+            chunks = [
+                out["tts_speech"]
+                for s in sentences
+                for out in model.inference_cross_lingual(
+                    f"{SYSTEM_PROMPT}{EOP}{s}", prompt_wav, stream=False, speed=req.speed
+                )
+            ]
         else:
-            # 沒逐字稿 → cross-lingual（不需要逐字稿，但相似度略差）
+            # CosyVoice2 的 cross-lingual：不注入前綴，斷句交給 inference 自己做
             it = model.inference_cross_lingual(
                 req.text, prompt_wav, stream=False, speed=req.speed
             )
-        chunks = [out["tts_speech"] for out in it]
+            chunks = [out["tts_speech"] for out in it]
     except Exception as e:  # 讓 gateway 拿到看得懂的錯誤，而不是 500 空白
         log.exception("synthesis failed")
         raise HTTPException(500, f"{ENGINE_NAME} 合成失敗：{e}")
