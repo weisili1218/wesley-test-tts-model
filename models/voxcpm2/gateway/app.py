@@ -46,7 +46,9 @@ REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", "600"))
 # CosyVoice 的 load_wav 要求 >=16k，VoxCPM2 官方也是收 16k reference。
 REF_SR = 16000
 
-# 上傳音檔的長度建議值。太短音色抓不準，太長浪費而且有些模型會截斷。
+# 上傳音檔的長度建議值。太短音色抓不準，太長對音色沒幫助還拖慢每次合成。
+# 這是「建議」，超過只會 warning；真正會讓合成失敗的硬上限由引擎自己宣告，
+# 見 /health 的 max_ref_sec 跟下面的 FALLBACK_MAX_REF_SEC。
 MIN_REF_SEC = 2.0
 MAX_REF_SEC = 30.0
 
@@ -210,10 +212,11 @@ async def _get_caps() -> dict[str, dict]:
     for name in ENGINES:
         try:
             info = await _engine_get(name, "/health")
-            out[name] = {"modes": info.get("modes") or [], "presets": info.get("presets") or []}
+            out[name] = {"modes": info.get("modes") or [], "presets": info.get("presets") or [],
+                         "max_ref_sec": info.get("max_ref_sec")}
         except Exception:
             # 引擎還沒起來就先當作沒能力，不要讓整個列表掛掉
-            out[name] = {"modes": [], "presets": []}
+            out[name] = {"modes": [], "presets": [], "max_ref_sec": None}
     _caps_cache, _caps_cache_at = out, time.time()
     return out
 
@@ -235,6 +238,25 @@ FALLBACK_MODES = {
     # 不過這張表只在引擎連不上、拿不到 /health 時才會用到，正常都是照引擎宣告的走。
     "qwen3-tts": ["clone"],
 }
+
+# 參考音檔的硬上限（秒）。None = 這顆引擎沒有上限。
+# 正常走引擎 /health 宣告的 max_ref_sec，這張表只在引擎連不上時當備援 ——
+# 但這條路徑一定要有備援：引擎沒起來時放行一個過長的音檔，使用者會拿到 201，
+# 然後每一次合成都失敗，而且錯誤訊息完全看不出是音檔太長。
+FALLBACK_MAX_REF_SEC = {
+    # CosyVoice 的 frontend._extract_speech_token 有
+    #   assert speech.shape[1] / 16000 <= 30
+    # 超過就是 AssertionError，它不會自己截斷。
+    "cosyvoice2": 30.0,
+    "fun-cosyvoice3": 30.0,
+    "voxcpm2": None,
+    "qwen3-tts": None,
+}
+
+
+def _max_ref_sec(engine: str, caps: dict[str, dict] | None = None) -> float | None:
+    got = (caps or {}).get(engine, {}).get("max_ref_sec")
+    return got if got is not None else FALLBACK_MAX_REF_SEC.get(engine)
 
 
 def _compatible_engines(voice: dict, caps: dict[str, dict] | None = None) -> list[str]:
@@ -316,8 +338,18 @@ async def create_voice(
     if duration < MIN_REF_SEC:
         dst.unlink(missing_ok=True)
         raise HTTPException(400, f"參考音檔只有 {duration:.1f} 秒，至少要 {MIN_REF_SEC} 秒才抓得到音色")
+    hard_limit = _max_ref_sec(default_engine, await _get_caps())
+    if hard_limit is not None and duration > hard_limit:
+        dst.unlink(missing_ok=True)
+        raise HTTPException(
+            400,
+            f"參考音檔 {duration:.1f} 秒，超過 {default_engine} 的上限 {hard_limit:.0f} 秒。"
+            f"這顆引擎不會自動截斷，硬建下去會變成音色建得起來、但每一次合成都失敗。"
+            f"請先剪到 {hard_limit:.0f} 秒以內（建議 5-15 秒）再上傳。",
+        )
     if duration > MAX_REF_SEC:
-        warnings.append(f"參考音檔 {duration:.1f} 秒偏長，建議 5-15 秒；部分模型會自行截斷")
+        warnings.append(f"參考音檔 {duration:.1f} 秒偏長，建議 5-15 秒；太長對音色沒有幫助，"
+                        "還會讓每次合成都多花時間重抽特徵")
     if not transcript.strip():
         warnings.append("沒有給逐字稿，音色相似度會下降。可以之後用 PATCH /v1/voices/{id} 補上")
 

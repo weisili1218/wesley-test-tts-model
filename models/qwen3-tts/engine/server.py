@@ -457,6 +457,8 @@ def health():
         "modes": MODES,
         # Base 只會克隆，沒有參考音檔就發不出聲音；CustomVoice 反之
         "needs_ref_audio": "clone" in MODES and "preset" not in MODES,
+        # 沒有參考音檔長度上限；gateway 靠這個欄位決定要不要在建立音色時擋。
+        "max_ref_sec": None,
         "presets": _presets,
         # 調參時用這段確認容器現在到底吃的是哪一組值，不用翻 log
         "profile": DEFAULT_PROFILE,

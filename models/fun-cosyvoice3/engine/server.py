@@ -14,6 +14,8 @@ CosyVoice engine HTTP server（CosyVoice2 / Fun-CosyVoice3 共用同一份程式
   MODEL_PATH      模型權重目錄
   COSYVOICE_CLASS CosyVoice2 或 CosyVoice3
   COSYVOICE_FP16  1 = 用 fp16（有 CUDA 時預設開）
+  COSYVOICE_MAX_REF_SEC
+                  參考音檔的硬上限秒數，預設 30（上游 frontend 的 assert）
   COSYVOICE3_SYSTEM_PROMPT
                   只有 CosyVoice3 用得到。接在 <|endofprompt|> 前面的 system prompt，
                   預設跟官方 model card 一致
@@ -39,6 +41,13 @@ CLASS_NAME = os.environ.get("COSYVOICE_CLASS", "CosyVoice3")
 
 # 對外宣告支援哪些音色來源，gateway 靠這個決定路由。
 MODES = [m.strip() for m in os.environ.get("ENGINE_MODES", "clone").split(",") if m.strip()]
+
+# 參考音檔的硬上限，gateway 靠這個在建立音色時就擋掉過長的檔案。
+# 來源是 frontend._extract_speech_token 的
+#   assert speech.shape[1] / 16000 <= 30, 'do not support extract speech token for audio longer than 30s'
+# 它不會自己截斷，超過就是 AssertionError —— 而那個錯誤會在合成時才出現，
+# 使用者只會看到音色建得起來、但每一次合成都失敗。
+MAX_REF_SEC = float(os.environ.get("COSYVOICE_MAX_REF_SEC", "30"))
 
 # CosyVoice3 的 LLM 硬性要求輸入裡有 <|endofprompt|>（token 151646）：
 #   cosyvoice/llm/llm.py:479   assert 151646 in text
@@ -104,6 +113,7 @@ def health():
         # gateway 靠這兩個欄位決定「這顆引擎能不能用這種音色」
         "modes": MODES,
         "needs_ref_audio": True,
+        "max_ref_sec": MAX_REF_SEC,
         "presets": [],
     }
 

@@ -238,7 +238,7 @@ query：`?type=clone|design|preset`、`?engine=<name>`（過濾 `compatible_engi
 
 | 方法 | 路徑 | 回應 |
 |---|---|---|
-| GET | `/health` | 能力宣告：`engine` / `loaded` / `sample_rate` / `modes` / `needs_ref_audio` / `presets` |
+| GET | `/health` | 能力宣告：`engine` / `loaded` / `sample_rate` / `modes` / `needs_ref_audio` / `presets` / `max_ref_sec`（參考音檔的硬上限秒數，`null` = 沒有上限。gateway 在 `POST /v1/voices` 就用它擋掉過長的音檔）|
 | POST | `/synthesize` | `audio/wav`，header 帶 `X-Sample-Rate`、`X-Engine` |
 | POST | `/warmup` | 主動載模型 |
 | GET | `/presets` | **只有 qwen3-tts 有**：`{"speakers": [...], "languages": [...]}` |
@@ -292,7 +292,7 @@ profile, temperature, top_p, top_k, repetition_penalty, seed
 | 引擎 | 變數 |
 |---|---|
 | 共通 | `ENGINE_NAME`、`MODEL_PATH`、`ENGINE_MODES` |
-| cosyvoice ×2 | `COSYVOICE_CLASS`（`CosyVoice2`/`CosyVoice3`）、`COSYVOICE_FP16` |
+| cosyvoice ×2 | `COSYVOICE_CLASS`（`CosyVoice2`/`CosyVoice3`）、`COSYVOICE_FP16`<br>`COSYVOICE_MAX_REF_SEC`（參考音檔硬上限秒數，預設 30，來自上游 `frontend._extract_speech_token` 的 assert）<br>`COSYVOICE3_SYSTEM_PROMPT`（只有 `CosyVoice3` 用得到。CosyVoice3 的 LLM 硬性要求輸入含 `<\|endofprompt\|>`，這是接在它前面那段 system prompt，預設 `You are a helpful assistant.`，跟官方 model card 一致）|
 | qwen3-tts | `QWEN_ATTN`（預設 `sdpa`，aarch64 上唯一免現場編譯的）、`QWEN_DTYPE`、`QWEN_DEFAULT_SPEAKER`（只有 CustomVoice checkpoint 用得到）<br>生成參數：`QWEN_PROFILE`（`fast`/`balanced`/`quality`，預設 `balanced`）、`QWEN_TEMPERATURE`、`QWEN_TOP_P`、`QWEN_TOP_K`、`QWEN_REPETITION_PENALTY`、`QWEN_SPLIT_MAX_CHARS`、`QWEN_RETRIES`、`QWEN_SEED`（後七個不設 = 照 profile 走）<br>效能：`QWEN_MAX_NEW_TOKENS_CAP`（2048）、`QWEN_PROMPT_CACHE_SIZE`（32）、`QWEN_MAX_BATCH`（8）、`QWEN_JOIN_SILENCE_MS`（120）|
 | voxcpm2 | `VOXCPM_OPTIMIZE`（torch.compile，預設關）、`VOXCPM_CFG`、`VOXCPM_TIMESTEPS` |
 

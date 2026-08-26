@@ -81,6 +81,8 @@ def health():
         "sample_rate": _model.tts_model.sample_rate if _model else None,
         "modes": MODES,
         "needs_ref_audio": False,
+        # 沒有參考音檔長度上限；gateway 靠這個欄位決定要不要在建立音色時擋。
+        "max_ref_sec": None,
         "presets": [],
     }
 
