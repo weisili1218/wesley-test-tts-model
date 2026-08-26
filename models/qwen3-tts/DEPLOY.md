@@ -65,6 +65,7 @@ gateway。`gateway/app.py` 四包完全一樣，不寫死引擎名稱 —— 掛
 | 引擎的 default 模式（不靠任何音色資料發聲） | ❌ |
 | 語氣／風格指令（`instructions`） | ❌ 克隆路徑沒有這個參數，會被忽略 |
 | `speed` 參數 | ❌ 會被忽略 |
+| 取樣參數（temperature / top_p / ...） | ✅ 三檔 profile，見下面「生成參數」 |
 
 **合成時不給 `voice` 會怎樣：** 挑**最近建立的克隆音色**。音色庫是空的就回 **400**。
 
@@ -76,6 +77,59 @@ gateway。`gateway/app.py` 四包完全一樣，不寫死引擎名稱 —— 掛
 > `ref_audio` / `ref_text`，沒有 `instruct` 參數 —— 語氣控制是 CustomVoice 那條路才有的。
 > 要「同一個音色換語氣」請用 `voxcpm2`（把描述併成 prefix）或 `fun-cosyvoice3`
 > （走 `inference_instruct2`）。
+
+---
+
+## 生成參數
+
+`generate_voice_clone()` 除了自己文件列的參數，還吃 HF Transformers `model.generate`
+的 kwargs。不傳的話會沿用 checkpoint `generation_config.json` 的預設
+（temperature **0.9** / top_k 50 / top_p 1.0 / repetition_penalty 1.05）——
+0.9 對自回歸 TTS 偏高，破音、吞字、整段重複唸同一個詞都是這個溫度來的。
+
+引擎用三檔 profile 取代那組預設。profile 除了取樣參數還帶「斷句積極度」和
+「重試次數」，所以三檔的速度差異是真的，不是只有音質差別：
+
+| `QWEN_PROFILE` | temperature | top_p | top_k | repetition_penalty | 斷句上限 | 重試 | 什麼時候用 |
+|---|---|---|---|---|---|---|---|
+| `fast` | 0.70 | 0.85 | 40 | 1.10 | 60 字 | 0 | 要快。切得碎 → batch 平行度高，代價是語調偏平、接縫多 |
+| `balanced`（預設） | 0.80 | 0.90 | 50 | 1.10 | 120 字 | 1 | 一般情況 |
+| `quality` | 0.85 | 0.95 | 50 | 1.05 | 200 字 | 2 | 要好。少斷句 → 語調連貫，壞掉會重生兩次，最慢 |
+
+**改 profile 不用重 build**，在 `compose.yaml` 的 `engine.environment` 設
+`QWEN_PROFILE`（那裡已經有註解好的範例），然後 `docker compose up -d engine` 重啟。
+
+### 單項覆蓋
+
+`QWEN_TEMPERATURE` / `QWEN_TOP_P` / `QWEN_TOP_K` / `QWEN_REPETITION_PENALTY` /
+`QWEN_SPLIT_MAX_CHARS` / `QWEN_RETRIES` / `QWEN_SEED` 設了就蓋掉 profile 的對應
+欄位，不設 = 照 profile 走。每個請求也可以自己帶同名欄位（`POST /v1/audio/speech`
+的 `profile` / `temperature` / `top_p` / `top_k` / `repetition_penalty` / `seed`），
+優先度最高 —— 現場 A/B 不用改任何設定檔。
+
+常見症狀怎麼調：
+
+| 症狀 | 調什麼 |
+|---|---|
+| 整段重複唸同一個詞 | `QWEN_REPETITION_PENALTY` 往上（1.1 → 1.15） |
+| 破音、亂唸、發音不穩 | `QWEN_TEMPERATURE` 往下（0.8 → 0.7） |
+| 語調太平、像機器人 | `QWEN_TEMPERATURE` 往上，或換 `quality` |
+| 長文中間有斷層感 | `QWEN_SPLIT_MAX_CHARS` 往上，或換 `quality` |
+| 某一句就是不對 | 帶不同的 `seed` 重打幾次 |
+
+### 效能相關
+
+| 機制 | 說明 |
+|---|---|
+| **參考音檔特徵快取** | 同一個音色連續合成時，`create_voice_clone_prompt()` 的結果會留在 LRU 裡（`QWEN_PROMPT_CACHE_SIZE`，預設 32 組），不用每次重抽 speech token + x-vector。**這是最大的提速項**，`GET /health` 的 `prompt_cache` 看得到命中數。<br>⚠ 這支 API 是官方 main 分支文件寫的，這包釘的是 `qwen-tts==0.1.1`。引擎啟動時會自己探測，沒有就退回原本每次重抽的路徑並在 log 講一聲，不會壞。 |
+| **長文斷句 + batch** | 超過斷句上限就切段、共用同一份參考音檔特徵、一次 batch 送進去（一批最多 `QWEN_MAX_BATCH`，預設 8），段落之間補 `QWEN_JOIN_SILENCE_MS`（預設 120ms）靜音。除了加速，更重要的是避開長序列的自回歸漂移。<br>⚠ `QWEN_MAX_BATCH` 往上調會吃光 unified memory，`compose.yaml` 的 `mem_limit` 擋不住，見那裡的註解。 |
+| **`max_new_tokens` 動態上限** | 12Hz tokenizer → 12 token ≈ 1 秒音訊，依文字長度估上限（硬上限 `QWEN_MAX_NEW_TOKENS_CAP`，預設 2048）。**正常情況模型碰到 EOS 就停，這個值不會讓它變快** —— 它的用處是鬼打牆時幾秒內就斷掉，而不是卡住整條 queue（gateway 每顆引擎只有一個 semaphore，卡住一個就擋住全部）。 |
+| **壞輸出換 seed 重生** | 產出音訊長度跟文字估算差太多（吞字／重複唸），或生到 token 上限還沒收尾，就換 seed 重生，次數看 profile。回應 header 的 `X-Retries` 是實際重生次數。 |
+| **`/warmup` 會真的合成一句** | 音色庫裡有 clone 音色的話，`POST /v1/warmup` 會拿它合成一句短的再丟掉，把 CUDA kernel 打熱。只載權重的話第一個真實請求還是要付首次配置的錢。 |
+| **attention** | 維持 `sdpa`。官方建議 FlashAttention 2，但它在 aarch64 + Blackwell（sm_121）要現場編譯，很久又常失敗，見 `engine/requirements.txt` 的註解。 |
+
+合成的回應 header 會多帶 `X-Profile`（實際用的 profile）、`X-Segments`（斷了幾段）、
+`X-Retries`（重生幾次），除錯時很好用。
 
 ---
 
@@ -115,12 +169,22 @@ bash check-conflicts.sh
 **要從別台機器連**（例如你的筆電、或另一個服務要呼叫它）：
 
 ```bash
-BIND_ADDR=0.0.0.0 docker compose up -d
+# 在 GB10 上
+BIND_ADDR=0.0.0.0 API_KEY=sk-自己隨便打一串 docker compose up -d
 ```
 
-這時候等於對整個網段開放，而且**預設沒有認證** —— 請一併把 `compose.yaml` 裡
-gateway 的 `API_KEY` 取消註解、換成你自己的字串，然後在客戶端設
-`export TTS_API_KEY=<同一個字串>`。
+`BIND_ADDR=0.0.0.0` 等於**對整個網段開放**，所以 `API_KEY` 請一起設 —— 不然
+同網段的任何人都能用你的 GPU 合成語音、讀寫你的音色庫。兩個都是從 shell 帶進去的，
+`compose.yaml` 不用改。客戶端那邊設同一個字串：
+
+```bash
+# 在你的筆電上
+export TTS_GATEWAY=http://<GB10 的 IP>:18003
+export TTS_API_KEY=sk-自己隨便打一串
+```
+
+設好之後 `./voice.sh` / `./synth.sh` / `scripts/batch.py` 直接在筆電上跑就會打過去，
+不用 SSH 進 GB10（腳本本來就吃這兩個環境變數）。GB10 的 IP 用 `ip -4 addr` 查。
 
 **要除錯直接戳引擎**：把 `compose.yaml` 裡 engine 的 `ports:` 跟下面那行取消註解，
 就會露出 `18083`。用完記得註解回去。
@@ -409,8 +473,12 @@ curl -X POST http://localhost:18003/v1/audio/speech \
 | `response_format` | `wav` / `mp3` / `flac` / `opus` / `aac`，非 wav 由 gateway 用 ffmpeg 轉 |
 | `speed` | ❌ 會被忽略 |
 | `language` | 選填，不給就 `Auto` 讓模型自己判斷。**官方建議明講**（`Chinese` / `English` / ...）克隆品質比較穩 |
+| `profile` | 選填，`fast` / `balanced` / `quality`，只這一次生效。不給就用引擎的 `QWEN_PROFILE` |
+| `temperature` / `top_p` / `top_k` / `repetition_penalty` | 選填，蓋掉 profile 的對應欄位。見上面「生成參數」 |
+| `seed` | 選填。固定住就可以重現同一次生成，或拿來 re-roll 不滿意的版本 |
 
-回應的 header 會標明實際用了什麼：`X-Engine`、`X-Voice-Id`、`X-Voice-Type`。
+回應的 header 會標明實際用了什麼：`X-Engine`、`X-Voice-Id`、`X-Voice-Type`、
+`X-Profile`、`X-Segments`、`X-Retries`。
 
 Python 端可以直接用 openai 套件：
 
@@ -492,8 +560,9 @@ python3 scripts/batch.py work/data/batch.csv --voice "$VOICE_ID"   # 整批蓋�
 > 這顆只吃 `clone` 音色。內建 `preset` 音色是 CustomVoice checkpoint 才有的，
 > 這包換成 Base 之後 `/v1/voices` 不會再列出任何 preset。
 
-**要加保護**就在 `compose.yaml` 的 gateway 設 `API_KEY`，之後所有 `/v1/*` 都要帶
-`Authorization: Bearer <key>`（`/healthz` 不用）。腳本則設環境變數：
+**要加保護**就在起服務時帶 `API_KEY`（`API_KEY=sk-xxxx docker compose up -d`），
+之後所有 `/v1/*` 都要帶 `Authorization: Bearer <key>`（`/healthz` 不用）。
+腳本則設環境變數：
 
 ```bash
 export TTS_GATEWAY=http://gb10:18003      # 前提：服務用 BIND_ADDR=0.0.0.0 起來

@@ -90,6 +90,23 @@ ENV HF_HUB_OFFLINE=1 \
     QWEN_DEFAULT_SPEAKER=Vivian \
     ENGINE_MODES=clone
 
+# --- 生成參數的預設值 --------------------------------------------------------
+# 這些全部可以在 compose.yaml 的 environment 蓋掉，**不用重 build**，改完
+# `docker compose up -d engine` 重啟就生效。三檔 profile 的內容見 server.py 開頭。
+#   QWEN_PROFILE            fast / balanced / quality
+#   QWEN_MAX_NEW_TOKENS_CAP 單段音訊的 token 硬上限（12 token ≈ 1 秒），鬼打牆時的保險
+#   QWEN_PROMPT_CACHE_SIZE  參考音檔特徵快取幾組音色
+#   QWEN_MAX_BATCH          長文斷句後一次送幾段（開太大會吃光 unified memory）
+#   QWEN_JOIN_SILENCE_MS    段落之間補多少毫秒靜音
+# 另外還有 QWEN_TEMPERATURE / QWEN_TOP_P / QWEN_TOP_K / QWEN_REPETITION_PENALTY /
+# QWEN_SPLIT_MAX_CHARS / QWEN_RETRIES / QWEN_SEED，設了就蓋掉 profile 的對應欄位，
+# 這裡刻意不給預設值 —— 不設 = 照 profile 走。
+ENV QWEN_PROFILE=balanced \
+    QWEN_MAX_NEW_TOKENS_CAP=2048 \
+    QWEN_PROMPT_CACHE_SIZE=32 \
+    QWEN_MAX_BATCH=8 \
+    QWEN_JOIN_SILENCE_MS=120
+
 EXPOSE 8080
 WORKDIR /opt/server
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]

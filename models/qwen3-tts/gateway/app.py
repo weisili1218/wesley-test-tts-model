@@ -488,7 +488,8 @@ async def _resolve_voice(ref: str) -> dict:
 
 def _build_payload(voice: dict, engine: str, text: str, instruct: str | None,
                    speed: float, language: str | None,
-                   caps: dict[str, dict] | None = None) -> dict:
+                   caps: dict[str, dict] | None = None,
+                   gen: dict | None = None) -> dict:
     """把一筆音色紀錄翻譯成目標引擎看得懂的 /synthesize 請求。"""
     compatible = _compatible_engines(voice, caps)
     if engine not in compatible:
@@ -511,6 +512,10 @@ def _build_payload(voice: dict, engine: str, text: str, instruct: str | None,
         payload["description"] = voice["description"]
     elif voice["type"] == "preset":
         payload["speaker"] = voice["speaker"]
+    # 生成參數只放有值的 —— None 不要送，讓引擎端的 profile 決定
+    for key, val in (gen or {}).items():
+        if val is not None:
+            payload[key] = val
     # type=default 什麼都不帶，讓引擎自己決定
     return payload
 
@@ -526,6 +531,15 @@ class SpeechRequest(BaseModel):
     response_format: Literal["wav", "mp3", "flac", "opus", "aac"] = "wav"
     speed: float = 1.0
     language: str | None = None
+    # 以下是生成參數，全部選填，不給就照引擎自己的預設走（qwen3-tts 是
+    # QWEN_PROFILE 那一檔）。只有 qwen3-tts 認得，其他三顆引擎的 SynthRequest
+    # 沒有這些欄位，pydantic 會直接忽略，所以帶了也不會壞。
+    profile: str | None = Field(None, description="qwen3-tts：fast / balanced / quality")
+    temperature: float | None = Field(None, description="越低越穩、越高語調越活。TTS 建議 0.7-0.9")
+    top_p: float | None = None
+    top_k: int | None = None
+    repetition_penalty: float | None = Field(None, description="調高可以擋「整段重複唸」，建議 1.05-1.15")
+    seed: int | None = Field(None, description="固定 seed 可以重現同一次生成，也方便 re-roll 不滿意的版本")
 
 
 @app.post("/v1/audio/speech", dependencies=[Depends(require_auth)])
@@ -544,8 +558,10 @@ async def create_speech(body: SpeechRequest):
     else:
         voice = await _default_voice_for(engine)
 
+    gen = {k: getattr(body, k) for k in
+           ("profile", "temperature", "top_p", "top_k", "repetition_penalty", "seed")}
     payload = _build_payload(voice, engine, body.input, body.instructions,
-                             body.speed, body.language, await _get_caps())
+                             body.speed, body.language, await _get_caps(), gen)
     wav = await _engine_synthesize(engine, payload)
     data, mime = _convert_wav(wav, body.response_format)
     return Response(
@@ -601,10 +617,27 @@ async def healthz():
     return {"status": "ok", "engines": sorted(ENGINES), "voices_dir": str(VOICES_DIR)}
 
 
+def _newest_clone() -> dict | None:
+    """音色庫裡最近建立的 clone 音色。暖機要真的合成一句就得有參考音檔。"""
+    clones = sorted([v for v in _load_registry().values() if v["type"] == "clone"],
+                    key=lambda v: v.get("created_at", ""), reverse=True)
+    return clones[0] if clones else None
+
+
 @app.post("/v1/warmup", dependencies=[Depends(require_auth)])
 async def warmup(engine: str | None = None):
-    """主動把模型載進 GPU。第一次合成要等 30-90 秒載模型，先打這支比較不會嚇到。"""
+    """主動把模型載進 GPU。第一次合成要等 30-90 秒載模型，先打這支比較不會嚇到。
+
+    音色庫裡有 clone 音色的話會順便帶進去，讓引擎真的合成一句短的再丟掉 ——
+    只載權重的話，第一個真實請求還是要付 CUDA kernel 首次配置的錢。
+    引擎端沒實作這個 body 的話會直接忽略，不影響原本的行為。
+    """
     targets = [engine] if engine else list(ENGINES)
+    voice = _newest_clone()
+    body = {
+        "ref_audio_path": voice.get("audio_path") if voice else None,
+        "ref_text": voice.get("transcript") if voice else None,
+    }
     out = {}
     for name in targets:
         if name not in ENGINES:
@@ -612,7 +645,7 @@ async def warmup(engine: str | None = None):
             continue
         try:
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
-                r = await c.post(ENGINES[name] + "/warmup")
+                r = await c.post(ENGINES[name] + "/warmup", json=body)
                 out[name] = r.json()
         except Exception as e:
             out[name] = {"error": str(e)}
