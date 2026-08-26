@@ -26,7 +26,6 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from cosyvoice.cli.cosyvoice import CosyVoice2, CosyVoice3
-from cosyvoice.utils.file_utils import load_wav
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("engine")
@@ -35,8 +34,6 @@ ENGINE_NAME = os.environ.get("ENGINE_NAME", "fun-cosyvoice3")
 MODEL_PATH = os.environ.get("MODEL_PATH", "/models/fun-cosyvoice3")
 CLASS_NAME = os.environ.get("COSYVOICE_CLASS", "CosyVoice3")
 
-# CosyVoice 的 prompt 音檔一律吃 16k 單聲道，這是它 frontend 的硬性要求。
-PROMPT_SR = 16000
 # 對外宣告支援哪些音色來源，gateway 靠這個決定路由。
 MODES = [m.strip() for m in os.environ.get("ENGINE_MODES", "clone").split(",") if m.strip()]
 
@@ -101,7 +98,12 @@ def synthesize(req: SynthRequest):
     if not os.path.exists(req.ref_audio_path):
         raise HTTPException(400, f"參考音檔不存在：{req.ref_audio_path}")
 
-    prompt_wav = load_wav(req.ref_audio_path, PROMPT_SR)
+    # 直接給路徑，不要先 load_wav 成張量。這個版本的 frontend_zero_shot 會把
+    # prompt_wav 原封不動丟進 load_wav()（frontend.py:121），也就是它自己要負責
+    # 讀檔並重取樣到 24k。傳張量進去會變成 torchaudio.load(tensor)，torchcodec
+    # 只吃 uint8 的編碼位元組，float 張量會 video_tensor must be kUInt8。
+    # 舊版 CosyVoice 的 prompt_speech_16k 收張量，這支是照舊版 API 寫的。
+    prompt_wav = req.ref_audio_path
 
     # instruct 跟 description 都是「要模型怎麼講」的自然語言，合成一句丟給 instruct2。
     style = " ".join(x for x in (req.description, req.instruct) if x)
