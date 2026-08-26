@@ -69,7 +69,18 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r /tmp/requirements.txt
 
 # --- CosyVoice 原始碼（含 Matcha-TTS submodule）------------------------------
-RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/cosyvoice \
+# git 物件放在 cache mount 的 bare mirror 裡，凡是要 CosyVoice 原始碼的包共用同一份。
+# 這層的 layer cache 失效時（改了 requirements.txt、換了 COSYVOICE_REF）不會再從
+# GitHub 抓一次完整歷史，只做增量 fetch。mirror 是 build cache 的一部分，
+# 要回收就 docker builder prune。
+#
+# sharing=locked：同時 build 多包時會排隊，不會有兩個 build 同時寫這份 mirror。
+RUN --mount=type=cache,id=cosyvoice-git,target=/git-cache,sharing=locked \
+    { [ -d /git-cache/CosyVoice.git ] \
+        || git clone --mirror https://github.com/FunAudioLLM/CosyVoice.git \
+             /git-cache/CosyVoice.git; } \
+    && git -C /git-cache/CosyVoice.git fetch --prune \
+    && git clone /git-cache/CosyVoice.git /opt/cosyvoice \
     && cd /opt/cosyvoice \
     && git checkout "${COSYVOICE_REF}" \
     && git submodule update --init --recursive \
@@ -77,10 +88,19 @@ RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/cosy
 
 # --- 把權重烘進 image（之後就能完全離線跑）----------------------------------
 # 用 python API 而不是 huggingface-cli / hf，因為那兩個指令名稱在 hub 版本之間換過。
-RUN --mount=type=cache,target=/root/.cache/pip pip install huggingface_hub \
-    && python -c "\
+# 權重先落在 cache mount 的 HF cache，再複製進 image，各包共用同一份 cache。
+# 不能直接寫 snapshot_download(local_dir=...) —— 帶了 local_dir 就會繞過 cache
+# （hub 0.36 的 docstring：the cache_dir will not be used），那樣每次這層失效
+# 都會重抓一次權重。copytree 的 symlinks=False 把 cache 裡指向 blobs/ 的符號
+# 連結解成實體檔案，所以 image 仍然自給自足，跑的時候不依賴 cache mount。
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=cache,id=hf-hub,target=/hf-cache,sharing=locked \
+    pip install huggingface_hub \
+    && HF_HUB_CACHE=/hf-cache python -c "\
+import shutil; \
 from huggingface_hub import snapshot_download; \
-snapshot_download('${MODEL_REPO}', local_dir='/models/fun-cosyvoice3')"
+shutil.copytree(snapshot_download('${MODEL_REPO}'), '/models/fun-cosyvoice3', \
+                symlinks=False, dirs_exist_ok=True)"
 
 COPY server.py /opt/server/server.py
 
