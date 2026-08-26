@@ -62,6 +62,20 @@ wetext==0.1.6
 # --- CosyVoice 的 module-level import 需要（見檔頭說明）
 modelscope==1.20.0
 
+# --- Matcha-TTS 的 module-level import 需要
+# Matcha-TTS 是 git submodule，靠 PYTHONPATH 掛進來，不經 pip 安裝，所以它自己的
+# 相依一律不會被裝進來，只能逐一在這裡補。推論路徑上的 import 鏈是
+#   cosyvoice/flow/flow_matching.py
+#     → matcha.models.components.flow_matching
+#       → matcha.utils.pylogger
+#         → matcha/utils/utils.py     ← 這支 module-level import 了 gdown 和 wget
+# 跟下面 setuptools 那項是同一條鏈，只是斷在更前面。
+#
+# matcha/utils/ 底下所有模組的第三方 import 都掃過了，其餘的（matplotlib、
+# omegaconf、rich、hydra、lightning、numpy、torch）這份清單本來就有。
+gdown==6.1.0
+wget==3.2
+
 # --- engine HTTP server
 fastapi==0.115.6
 uvicorn[standard]==0.30.0
