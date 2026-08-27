@@ -35,7 +35,9 @@ QWEN_REPETITION_PENALTY / QWEN_SPLIT_MAX_CHARS / QWEN_RETRIES 蓋掉 profile，
 
 另外三件事：
   * 參考音檔特徵有 LRU 快取（create_voice_clone_prompt），同一個音色連續合成
-    不用每次重抽 speech token + x-vector —— 這是最大的提速項。
+    不用每次重抽 speech token + x-vector —— 這是最大的提速項。gateway 在
+    POST /v1/voices 建立音色時就會打 /voices/prepare 先推進來，所以連「第一次
+    合成」都不用抽；刪音色時打 /voices/forget 收回去。
   * 長文自動斷句後 batch 推論，避免長序列自回歸漂移，也順便加速。
   * 產出明顯不對（吞字／鬼打牆）時換 seed 重生，回應帶 X-Retries。
 
@@ -297,6 +299,15 @@ def _clone_prompt_supported(model) -> bool:
     return _clone_prompt_ok
 
 
+def forget_clone_prompt(ref_audio_path: str) -> int:
+    """把這個參考音檔的快取條目全部丟掉（同一個音檔可能有不同 ref_text 的版本）。"""
+    dropped = 0
+    for key in [k for k in _prompt_cache if k[0] == ref_audio_path]:
+        _prompt_cache.pop(key, None)
+        dropped += 1
+    return dropped
+
+
 def get_clone_prompt(model, ref_audio_path: str, ref_text: str | None):
     """回傳可重複使用的 clone prompt；不支援就回 None，呼叫端退回原本的路徑。"""
     if not _clone_prompt_supported(model):
@@ -464,6 +475,8 @@ def health():
         "profile": DEFAULT_PROFILE,
         "profiles": sorted(PROFILES),
         "params": resolve_params(None, {}),
+        # gateway 靠這個欄位知道這顆引擎收 /voices/prepare
+        "supports_voice_prepare": True,
         "prompt_cache": {
             "supported": _clone_prompt_ok,
             "size": len(_prompt_cache),
@@ -580,6 +593,52 @@ def synthesize(req: SynthRequest):
             "X-Retries": str(retries_used),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# 音色特徵：先建好放著
+# ---------------------------------------------------------------------------
+class PrepareRequest(BaseModel):
+    ref_audio_path: str
+    ref_text: str | None = None
+    # 預設不為了建快取去載模型 —— 那要 30-90 秒，會讓 ./voice.sh add 莫名其妙卡住。
+    load_model: bool = False
+
+
+@app.post("/voices/prepare")
+def prepare_voice(req: PrepareRequest):
+    """把一個音色的參考特徵先抽好放進快取，之後連第一次合成都不用抽。
+
+    gateway 在 POST /v1/voices 建立音色時會打這支。回 200 但 prepared=false 是
+    正常結果（引擎還沒載模型、或這版 qwen-tts 沒有那支 API），不是錯誤。
+    """
+    if not os.path.exists(req.ref_audio_path):
+        raise HTTPException(400, f"參考音檔不存在：{req.ref_audio_path}")
+    if "clone" not in MODES:
+        return {"prepared": False,
+                "reason": f"這個 checkpoint（{MODEL_PATH}）不做克隆，沒有參考音檔特徵可以建"}
+    if _model is None and not req.load_model:
+        return {"prepared": False,
+                "reason": "引擎還沒載模型。先打 POST /v1/warmup 再建音色就會直接建好；"
+                          "不打也可以，第一次合成時會自己建。"}
+
+    items = get_clone_prompt(get_model(), req.ref_audio_path, req.ref_text)
+    return {
+        "prepared": items is not None,
+        "reason": None if items is not None
+                  else "這版 qwen-tts 沒有 create_voice_clone_prompt，每次都會重抽特徵",
+        "prompt_cache": {"size": len(_prompt_cache), "capacity": PROMPT_CACHE_SIZE,
+                         **_cache_stats},
+    }
+
+
+@app.post("/voices/forget")
+def forget_voice(req: PrepareRequest):
+    """把這個參考音檔的快取條目丟掉。gateway 刪音色 / 改逐字稿時打。"""
+    dropped = forget_clone_prompt(req.ref_audio_path)
+    return {"dropped": dropped,
+            "prompt_cache": {"size": len(_prompt_cache), "capacity": PROMPT_CACHE_SIZE,
+                             **_cache_stats}}
 
 
 class WarmupRequest(BaseModel):

@@ -454,6 +454,7 @@ python3 scripts/batch.py work/data/batch.csv --voice 小美
 | GET | `/v1/voices/{id}` | 單一音色 | ✅ |
 | PATCH | `/v1/voices/{id}` | 改名 / 補逐字稿 | ✅ |
 | DELETE | `/v1/voices/{id}` | 刪除，連 wav 一起 | ✅ |
+| POST | `/v1/voices/{id}/prepare` | 叫引擎把參考特徵先抽好（建音色時已自動做過）| ✅ |
 | POST | `/v1/voices/{id}/preview` | 試聽，可加 `?text=` | ✅ |
 
 互動式文件在 `http://localhost:18004/docs`。

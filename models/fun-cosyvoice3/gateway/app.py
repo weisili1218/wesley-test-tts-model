@@ -41,6 +41,9 @@ REGISTRY = VOICES_DIR / "voices.json"
 DEFAULT_ENGINE = os.environ.get("DEFAULT_ENGINE", "cosyvoice2")
 API_KEY = os.environ.get("API_KEY", "").strip()
 REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", "600"))
+# 建立音色時把參考特徵推給引擎先算好用的 timeout。抽特徵只要一兩秒，
+# 給 120 秒是留給「30 秒音檔 + ONNX 跑 CPU」的最壞情況。
+PREPARE_TIMEOUT = float(os.environ.get("PREPARE_TIMEOUT", "120"))
 
 # 參考音檔一律轉成單聲道，取樣率由 REF_SR 決定（預設 16k，各家模型的最大公因數：
 # CosyVoice 的 load_wav 要求 >=16k，VoxCPM2 官方也是收 16k reference）。
@@ -207,6 +210,51 @@ async def _engine_synthesize(name: str, payload: dict) -> bytes:
             pass
         raise HTTPException(r.status_code, f"[{name}] {detail}")
     return r.content
+
+
+async def _engine_voice_op(engine: str, op: str, voice: dict,
+                           load_model: bool = False) -> dict:
+    """把音色的參考音檔推給引擎做 prepare / forget。
+
+    這是純粹的最佳化：引擎那邊會把 speech token、x-vector、prompt mel 這些
+    「同一個音色每次合成都算一模一樣」的東西抽好存起來，之後合成就直接取用。
+    沒做也不影響正確性，引擎第一次用到時會自己補 —— 所以這裡**任何失敗都不會**
+    讓建立音色的請求失敗，只會回一段說明放進 warnings。
+
+    引擎沒實作這兩支路由（voxcpm2，或舊版 image）會拿到 404/405，一樣當成
+    「沒做」處理，不會壞。
+    """
+    if engine not in ENGINES:
+        return {"prepared": False, "reason": f"沒有這顆引擎：{engine}"}
+    if not voice.get("audio_path"):
+        return {"prepared": False, "reason": "這個音色沒有參考音檔"}
+    payload = {"ref_audio_path": voice["audio_path"],
+               "ref_text": voice.get("transcript"),
+               "load_model": load_model}
+    try:
+        # 走跟合成同一個 semaphore：抽特徵也是 GPU 工作，不要跟合成擠在一起
+        async with _engine_locks[engine]:
+            async with httpx.AsyncClient(timeout=PREPARE_TIMEOUT) as c:
+                r = await c.post(f"{ENGINES[engine]}/voices/{op}", json=payload)
+    except httpx.RequestError as e:
+        return {"prepared": False, "reason": f"連不到引擎 {engine}（{e}）"}
+    if r.status_code in (404, 405):
+        return {"prepared": False, "reason": f"引擎 {engine} 沒有實作音色特徵快取"}
+    if r.status_code >= 400:
+        return {"prepared": False, "reason": r.text[:200]}
+    try:
+        return r.json()
+    except Exception:
+        return {"prepared": False, "reason": "引擎回的不是 JSON"}
+
+
+async def _prepare_warning(result: dict) -> str | None:
+    """prepare 沒成功時給使用者一句看得懂的話；成功就回 None。"""
+    if result.get("prepared"):
+        return None
+    reason = result.get("reason") or "原因不明"
+    return (f"音色特徵還沒先建好（{reason}）。這不影響能不能用，"
+            "只是第一次合成會多花幾秒抽特徵。")
 
 
 async def _get_caps() -> dict[str, dict]:
@@ -381,7 +429,18 @@ async def create_voice(
         reg[voice_id] = voice
         _save_registry(reg)
 
-    return JSONResponse({"voice": _public(voice), "warnings": warnings}, status_code=201)
+    # 音色存好了，順手把參考特徵推給引擎先算起來放著 —— 之後每一次合成都不用再抽。
+    # 引擎還沒載模型的話它會直接說「沒建」（不會為了這個去載 30-90 秒的模型），
+    # 那就等第一次合成時自己建。任何失敗都只是變成一句 warning。
+    prep = await _engine_voice_op(default_engine, "prepare", voice)
+    warn = await _prepare_warning(prep)
+    if warn:
+        warnings.append(warn)
+
+    return JSONResponse(
+        {"voice": _public(voice), "prepared": bool(prep.get("prepared")), "warnings": warnings},
+        status_code=201,
+    )
 
 
 @app.post("/v1/voices/design", dependencies=[Depends(require_auth)], status_code=201)
@@ -467,7 +526,19 @@ async def update_voice(voice_id: str, body: VoiceUpdate):
                 voice[field] = val
         reg[voice_id] = voice
         _save_registry(reg)
-    return {"voice": _public(voice)}
+
+    # 逐字稿是 zero-shot 那份快取的一部分（引擎那邊 prompt_text 也進了 key），
+    # 改了就得把舊的丟掉重建，不然新的逐字稿要等 LRU 淘汰才會生效。
+    prepared = None
+    if body.transcript is not None:
+        await _engine_voice_op(voice.get("default_engine") or DEFAULT_ENGINE, "forget", voice)
+        prep = await _engine_voice_op(voice.get("default_engine") or DEFAULT_ENGINE,
+                                      "prepare", voice)
+        prepared = bool(prep.get("prepared"))
+    out = {"voice": _public(voice)}
+    if prepared is not None:
+        out["prepared"] = prepared
+    return out
 
 
 @app.delete("/v1/voices/{voice_id}", dependencies=[Depends(require_auth)])
@@ -478,9 +549,32 @@ async def delete_voice(voice_id: str):
             raise HTTPException(404, f"找不到音色 {voice_id}（內建 preset 音色不能刪）")
         voice = reg.pop(voice_id)
         _save_registry(reg)
+    # 先叫引擎放掉快取（那裡面是 GPU 張量），再刪檔案
+    for name in ENGINES:
+        await _engine_voice_op(name, "forget", voice)
     if voice.get("audio_path"):
         Path(voice["audio_path"]).unlink(missing_ok=True)
     return {"deleted": True, "id": voice_id}
+
+
+@app.post("/v1/voices/{voice_id}/prepare", dependencies=[Depends(require_auth)])
+async def prepare_voice(voice_id: str, engine: str | None = None, load_model: bool = False):
+    """叫引擎把這個音色的參考特徵抽好放著，之後合成就不用再抽。
+
+    建立音色時已經自動做過一次，這支是給這幾種情況補打的：
+      * 引擎重啟過 —— 快取放在引擎的記憶體裡，容器一重啟就沒了
+      * 建音色的時候引擎還沒載模型（那時會跳過，回應的 warnings 有寫）
+      * 音色是從別台機器整個 work/voices/ 複製過來的，沒經過 POST /v1/voices
+
+    `load_model=true` 會允許引擎為了建快取去載模型（要等 30-90 秒）；
+    預設 false，引擎沒載模型就直接說沒建。
+    """
+    voice = await _resolve_voice(voice_id)
+    if voice["type"] != "clone":
+        raise HTTPException(400, f"只有 clone 型別的音色有參考特徵可以建，這個是 {voice['type']}")
+    eng = engine or voice.get("default_engine") or DEFAULT_ENGINE
+    result = await _engine_voice_op(eng, "prepare", voice, load_model=load_model)
+    return {"engine": eng, "voice_id": voice["id"], **result}
 
 
 @app.post("/v1/voices/{voice_id}/preview", dependencies=[Depends(require_auth)])
