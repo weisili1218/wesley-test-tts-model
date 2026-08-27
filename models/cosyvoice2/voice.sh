@@ -9,7 +9,7 @@
 #   ./voice.sh rm <voice_id>                        刪除
 #
 # CosyVoice2 是純 zero-shot 克隆，沒有內建音色也不吃文字描述，所以只有 add 這條路。
-# 音檔可以是任意格式（wav/mp3/m4a/flac...），gateway 會用 ffmpeg 轉成 16k 單聲道。
+# 音檔可以是任意格式（wav/mp3/m4a/flac...），gateway 會用 ffmpeg 轉成 24k 單聲道。
 # 逐字稿請盡量給 —— 不給的話會退回 cross-lingual 路徑，音色相似度明顯下降。
 #
 # 這一包只有 cosyvoice2 一顆引擎，所以指令裡不用指定引擎（舊版 preview 的

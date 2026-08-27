@@ -42,9 +42,19 @@ DEFAULT_ENGINE = os.environ.get("DEFAULT_ENGINE", "cosyvoice2")
 API_KEY = os.environ.get("API_KEY", "").strip()
 REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", "600"))
 
-# 參考音檔一律轉成 16k 單聲道：各家模型的最大公因數。
-# CosyVoice 的 load_wav 要求 >=16k，VoxCPM2 官方也是收 16k reference。
-REF_SR = 16000
+# 參考音檔一律轉成單聲道，取樣率由 REF_SR 決定（預設 16k，各家模型的最大公因數：
+# CosyVoice 的 load_wav 要求 >=16k，VoxCPM2 官方也是收 16k reference）。
+#
+# ⚠ CosyVoice2 / Fun-CosyVoice3 這兩包請在 compose 設 REF_SR=24000。原因是同一個
+# 檔案會被上游拿去抽三種特徵，而三條路徑要的取樣率不一樣：
+#     _extract_speech_token  → load_wav(wav, 16000)   speech tokenizer
+#     _extract_spk_embedding → load_wav(wav, 16000)   campplus 音色向量
+#     _extract_speech_feat   → load_wav(wav, 24000)   ← flow 的 prompt mel
+# 給 16k 不會報錯（load_wav 只 assert sample_rate >= 16000），但第三條會把 16k
+# **升採樣**到 24k —— 那份 mel 就是 flow matching 的聲學 prompt，8 kHz 以上整片是空的，
+# 產出的聲音會繼承這個被砍掉高頻的頻譜包絡，聽起來悶、沒有齒音跟空氣感。
+# 存 24k 則三條路徑都正確：前兩條自己降頻到 16k，第三條剛好命中。
+REF_SR = int(os.environ.get("REF_SR", "16000"))
 
 # 上傳音檔的長度建議值。太短音色抓不準，太長對音色沒幫助還拖慢每次合成。
 # 這是「建議」，超過只會 warning；真正會讓合成失敗的硬上限由引擎自己宣告，
@@ -135,7 +145,7 @@ def _probe_duration(path: Path) -> float:
 
 
 def _normalize_ref_audio(src: Path, dst: Path) -> None:
-    """任意格式 → 16k 單聲道 16-bit wav。"""
+    """任意格式 → REF_SR 單聲道 16-bit wav。"""
     p = subprocess.run(
         ["ffmpeg", "-y", "-i", str(src), "-ac", "1", "-ar", str(REF_SR),
          "-c:a", "pcm_s16le", str(dst)],

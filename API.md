@@ -144,7 +144,7 @@ curl -X POST http://localhost:18002/v1/audio/speech \
 
 | 欄位 | 必填 | 說明 |
 |---|---|---|
-| `file` | ✅ | 參考音檔。任意格式，gateway 用 ffmpeg 轉成 **16k 單聲道 16-bit wav** |
+| `file` | ✅ | 參考音檔。任意格式，gateway 用 ffmpeg 轉成 **單聲道 16-bit wav**，取樣率看該包 compose 的 `REF_SR`（預設 16k；cosyvoice2 / fun-cosyvoice3 是 **24k**，因為 flow 的 prompt mel 要 24k，給 16k 會被升採樣、克隆聲音會悶掉） |
 | `name` | ✅ | 音色名稱 |
 | `transcript` | — | 參考音檔的逐字稿。**強烈建議填**，見下 |
 | `language` | — | 語言標記 |
@@ -154,7 +154,7 @@ curl -X POST http://localhost:18002/v1/audio/speech \
 
 ```json
 {"voice": {"id": "voice_a1b2c3d4e5f6", "name": "小美", "type": "clone",
-           "transcript": "...", "duration_sec": 8.3, "sample_rate": 16000,
+           "transcript": "...", "duration_sec": 8.3, "sample_rate": 24000,
            "has_audio": true, "compatible_engines": ["fun-cosyvoice3"],
            "created_at": "2026-08-21T03:00:00Z"},
  "warnings": ["沒有給逐字稿，音色相似度會下降。..."]}

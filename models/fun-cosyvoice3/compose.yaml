@@ -42,6 +42,11 @@ services:
       ENGINES: "fun-cosyvoice3=http://engine:8080"
       DEFAULT_ENGINE: fun-cosyvoice3
       REQUEST_TIMEOUT: "600"
+      # 參考音檔存成 24k，不是預設的 16k。CosyVoice 的 frontend 會拿同一個檔案抽三種
+      # 特徵，其中 flow 的 prompt mel 走 load_wav(wav, 24000) —— 給 16k 不會報錯，
+      # 但會被升採樣，那份 mel 8 kHz 以上是空的，克隆出來的聲音會悶掉。
+      # 另外兩條（speech token / campplus）要 16k，它們自己會降頻，所以存 24k 三條都對。
+      REF_SR: "24000"
       # API_KEY: "sk-xxxx"             # 設了就會檢查 Authorization: Bearer
     depends_on:
       - engine

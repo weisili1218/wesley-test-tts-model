@@ -23,6 +23,7 @@ CosyVoice engine HTTP server（CosyVoice2 / Fun-CosyVoice3 共用同一份程式
 import io
 import os
 import logging
+import threading
 
 import soundfile as sf
 import torch
@@ -71,17 +72,26 @@ IS_CV3 = CLASS_NAME == "CosyVoice3"
 
 app = FastAPI(title=f"{ENGINE_NAME} engine")
 _model = None
+# /synthesize 跟 /warmup 都是 sync def，FastAPI 會把它們丟到 threadpool 跑，兩者
+# 可以真的同時執行 —— gateway 那個 per-engine semaphore 只擋 /synthesize，warmup
+# 是直接打的。沒有這把鎖的話，「先 warmup 再合成」如果撞在一起，兩條 thread 會
+# 同時看到 _model is None 而各載一份權重。GB10 是 unified memory，多出來的那份
+# 跟整台機器搶同一池，這正是最容易 OOM 的路徑。
+_model_lock = threading.Lock()
 
 
 def get_model():
     """第一次呼叫時才載入模型，讓容器可以先起來、healthcheck 再慢慢等。"""
     global _model
-    if _model is None:
-        fp16 = os.environ.get("COSYVOICE_FP16", "1") == "1" and torch.cuda.is_available()
-        cls = {"CosyVoice2": CosyVoice2, "CosyVoice3": CosyVoice3}[CLASS_NAME]
-        log.info("loading %s from %s (fp16=%s)", CLASS_NAME, MODEL_PATH, fp16)
-        _model = cls(MODEL_PATH, load_trt=False, load_vllm=False, fp16=fp16)
-        log.info("loaded, sample_rate=%d", _model.sample_rate)
+    if _model is not None:          # 已載入就不必進鎖，合成路徑不會被序列化
+        return _model
+    with _model_lock:
+        if _model is None:          # double-checked：等到鎖的那條可能已經被載好了
+            fp16 = os.environ.get("COSYVOICE_FP16", "1") == "1" and torch.cuda.is_available()
+            cls = {"CosyVoice2": CosyVoice2, "CosyVoice3": CosyVoice3}[CLASS_NAME]
+            log.info("loading %s from %s (fp16=%s)", CLASS_NAME, MODEL_PATH, fp16)
+            _model = cls(MODEL_PATH, load_trt=False, load_vllm=False, fp16=fp16)
+            log.info("loaded, sample_rate=%d", _model.sample_rate)
     return _model
 
 
