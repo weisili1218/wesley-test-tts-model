@@ -311,7 +311,7 @@ curl -s http://localhost:18002/v1/models | python3 -m json.tool
 ### 用指令包裝（最省事）
 
 ```bash
-# 上傳參考音檔建立克隆音色。音檔什麼格式都行，gateway 會用 ffmpeg 轉成 16k 單聲道
+# 上傳參考音檔建立克隆音色。音檔什麼格式都行，gateway 會用 ffmpeg 轉成 24k 單聲道
 ./voice.sh add 小美 work/data/xiaomei.m4a "這裡放這段音檔的逐字稿。"
 
 # 看有哪些音色
@@ -448,6 +448,7 @@ python3 scripts/batch.py work/data/batch.csv --voice 小美
 | GET | `/v1/voices/{id}` | 單一音色 | ✅ |
 | PATCH | `/v1/voices/{id}` | 改名 / 補逐字稿 | ✅ |
 | DELETE | `/v1/voices/{id}` | 刪除，連 wav 一起 | ✅ |
+| POST | `/v1/voices/{id}/prepare` | 叫引擎把參考特徵先抽好（建音色時已自動做過）| ✅ |
 | POST | `/v1/voices/{id}/preview` | 試聽，可加 `?text=` | ✅ |
 
 互動式文件在 `http://localhost:18002/docs`。

@@ -10,9 +10,17 @@
 #                            推論路徑完全沒 import。
 #   tensorrt-cu12          → 只有 load_trt=True 才需要，而且是 cu12。我們不開 TRT。
 #   gradio                 → 只有 demo 用得到，拿掉省時間跟相依衝突。
-#   modelscope             → 我們用 huggingface_hub 下載，不需要它。
 #   ttsfrd                 → 只有 x86_64 wheel。frontend.py 有 try/except，
 #                            import 失敗會自動 fallback 到 wetext。
+#
+#   modelscope             → 【要留著，不能拿掉】雖然權重是用 huggingface_hub 下載、
+#                            執行期永遠走不到它（snapshot_download 只在
+#                            `if not os.path.exists(model_dir)` 時才呼叫，而權重已烘進
+#                            image），但 cosyvoice/cli/cosyvoice.py:19 是 **module-level**
+#                            的 `from modelscope import snapshot_download` —— 拿掉的話
+#                            光是 import CosyVoice2 就 ModuleNotFoundError，
+#                            Dockerfile 的冒煙測試會當場失敗。
+#                            代價其實很小：它只有 requests / tqdm / urllib3 三個相依。
 #
 # 特別說明 wetext：官方新版已經從 WeTextProcessing(pynini) 換成 wetext(kaldifst)，
 # kaldifst 有現成的 aarch64 wheel，所以這版**不再需要 micromamba/conda**。
@@ -51,7 +59,55 @@ pyworld==0.3.4
 # --- 中文文字正規化（取代 pynini/WeTextProcessing）
 wetext==0.1.6
 
+# --- CosyVoice 的 module-level import 需要（見檔頭說明）
+modelscope==1.20.0
+
+# --- Matcha-TTS 的 module-level import 需要
+# Matcha-TTS 是 git submodule，靠 PYTHONPATH 掛進來，不經 pip 安裝，所以它自己的
+# 相依一律不會被裝進來，只能逐一在這裡補。推論路徑上的 import 鏈是
+#   cosyvoice/flow/flow_matching.py
+#     → matcha.models.components.flow_matching
+#       → matcha.utils.pylogger
+#         → matcha/utils/utils.py     ← 這支 module-level import 了 gdown 和 wget
+# 跟下面 setuptools 那項是同一條鏈，只是斷在更前面。
+#
+# matcha/utils/ 底下所有模組的第三方 import 都掃過了，其餘的（matplotlib、
+# omegaconf、rich、hydra、lightning、numpy、torch）這份清單本來就有。
+gdown==6.1.0
+wget==3.2
+
+# --- 載模型時才會被 import 到（冒煙測試的 import CosyVoice2 抓不到）
+# 模型設定 cosyvoice2.yaml 裡有 !name: 指向 cosyvoice.dataset.processor 的欄位，
+# hyperpyyaml 解析時用 pydoc.locate 動態載入那支模組，而它 module-level
+# import pyarrow.parquet。整條路徑只有在 CosyVoice2(model_dir) 實際讀設定時才會走到。
+pyarrow==25.0.1
+
 # --- engine HTTP server
 fastapi==0.115.6
 uvicorn[standard]==0.30.0
 pydantic==2.9.2
+
+# ---------------------------------------------------------------------------
+# 版本護欄：以下兩項不釘就會裝到最新版，而最新版在這條路徑上是壞的。
+# 兩個都不會讓 build 失敗，是等到 /warmup 載模型時才炸 —— 那時已經燒掉 30-60 分鐘。
+# ---------------------------------------------------------------------------
+#
+# ruamel.yaml：0.19.0 起 composer.py 會檢查 self.loader.max_depth，該屬性只存在於
+#   新 API 的 YAML() 物件上。HyperPyYAML 1.2.3（跟 1.2.2 的程式碼完全相同）走的是
+#   舊路徑 —— 用 PyYAML 的 yaml.load() 去驅動 ruamel 的 legacy Loader 類別，
+#   那個物件沒有 max_depth。而 CosyVoice2.__init__ 一開始就呼叫 load_hyperpyyaml
+#   （cosyvoice/cli/cosyvoice.py:150），所以載模型必炸。
+ruamel.yaml==0.18.14
+#
+# setuptools：82.0.0 移除了 pkg_resources（81.x 還有，實測 80.9/81.0 都含 19 個檔案）。
+#   推論路徑上的 import 鏈是
+#     cosyvoice/flow/flow_matching.py
+#       → matcha.models.components.flow_matching
+#         → matcha.utils.pylogger
+#           → from lightning.pytorch.utilities import rank_zero_only
+#             → lightning/fabric/utilities/registry.py: import pkg_resources
+#   （已確認 lightning 2.2.4 裡只有 registry.py 這一個檔案 import 它。）
+#   Dockerfile 的 `pip install -U setuptools` 會裝到 84+，所以要在這裡壓回去。
+#   （torch 2.11 自己也要求 setuptools<82，但別依賴那個傳遞約束 —— 上游哪天放寬就
+#     會無聲無息地壞掉。這裡明確釘住。）
+setuptools<82

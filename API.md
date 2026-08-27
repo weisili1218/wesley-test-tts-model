@@ -144,7 +144,7 @@ curl -X POST http://localhost:18002/v1/audio/speech \
 
 | 欄位 | 必填 | 說明 |
 |---|---|---|
-| `file` | ✅ | 參考音檔。任意格式，gateway 用 ffmpeg 轉成 **16k 單聲道 16-bit wav** |
+| `file` | ✅ | 參考音檔。任意格式，gateway 用 ffmpeg 轉成 **單聲道 16-bit wav**，取樣率看該包 compose 的 `REF_SR`（預設 16k；cosyvoice2 / fun-cosyvoice3 是 **24k**，因為 flow 的 prompt mel 要 24k，給 16k 會被升採樣、克隆聲音會悶掉） |
 | `name` | ✅ | 音色名稱 |
 | `transcript` | — | 參考音檔的逐字稿。**強烈建議填**，見下 |
 | `language` | — | 語言標記 |
@@ -154,7 +154,7 @@ curl -X POST http://localhost:18002/v1/audio/speech \
 
 ```json
 {"voice": {"id": "voice_a1b2c3d4e5f6", "name": "小美", "type": "clone",
-           "transcript": "...", "duration_sec": 8.3, "sample_rate": 16000,
+           "transcript": "...", "duration_sec": 8.3, "sample_rate": 24000,
            "has_audio": true, "compatible_engines": ["fun-cosyvoice3"],
            "created_at": "2026-08-21T03:00:00Z"},
  "warnings": ["沒有給逐字稿，音色相似度會下降。..."]}
@@ -192,7 +192,33 @@ query：`?type=clone|design|preset`、`?engine=<name>`（過濾 `compatible_engi
 #### `GET /v1/voices/{id}` / `PATCH` / `DELETE`
 
 - `PATCH`：可改 `name`、`transcript`、`description`、`language`、`default_engine`。**preset 是唯讀的，打了回 404。**
-- `DELETE`：連 wav 一起刪，回 `{"deleted": true, "id": "..."}`。
+- `DELETE`：連 wav 一起刪，回 `{"deleted": true, "id": "..."}`。刪之前會先叫引擎放掉這個音色的特徵快取。
+- 改 `transcript` 會讓引擎那份 zero-shot 快取失效，gateway 會自動重建（回應多一個 `prepared` 欄位）。
+
+#### `POST /v1/voices/{id}/prepare` — 先把參考特徵抽好放著
+
+參數走 **query string**：`?engine=<name>`、`?load_model=true|false`（預設 `false`）。
+
+引擎會把「同一個音色每次合成都算一模一樣」的東西（speech token、x-vector、
+prompt mel）抽好存進記憶體，之後合成直接取用。**建立音色時 gateway 已經自動打過一次**，
+這支是給下面幾種情況補打的：
+
+- **引擎重啟過** —— 快取在引擎的記憶體裡，容器一重啟就沒了
+- 建音色時引擎還沒載模型（那時會跳過，`POST /v1/voices` 的 `warnings` 會寫）
+- 音色是整個 `work/voices/` 從別台機器複製過來的，沒經過 `POST /v1/voices`
+
+```json
+{"engine": "fun-cosyvoice3", "voice_id": "voice_a1b2c3d4e5f6",
+ "prepared": true, "path": "zero_shot", "voice_cache": {"size": 1, "capacity": 32}}
+```
+
+`prepared: false` **不是錯誤**，只表示這次沒先建（引擎還沒載模型、或這顆引擎沒實作
+快取），`reason` 會說明；合成一樣會成功，只是第一次要多花幾秒抽特徵。
+`load_model=true` 會允許引擎為了建快取去載模型，那要等 30-90 秒。
+
+> 帶 `instructions` 的合成走的是另一條路徑（instruct2），它的快取是**按 instruct
+> 內容分開存**的，沒辦法預先建 —— 第一次用到某句語氣指令時才會建，之後同一句就命中。
+> 批次 CSV 整欄同樣的語氣指令屬於會命中的情況。
 
 #### `POST /v1/voices/{id}/preview` — 試聽
 
@@ -238,7 +264,7 @@ query：`?type=clone|design|preset`、`?engine=<name>`（過濾 `compatible_engi
 
 | 方法 | 路徑 | 回應 |
 |---|---|---|
-| GET | `/health` | 能力宣告：`engine` / `loaded` / `sample_rate` / `modes` / `needs_ref_audio` / `presets` |
+| GET | `/health` | 能力宣告：`engine` / `loaded` / `sample_rate` / `modes` / `needs_ref_audio` / `presets` / `max_ref_sec`（參考音檔的硬上限秒數，`null` = 沒有上限。gateway 在 `POST /v1/voices` 就用它擋掉過長的音檔）|
 | POST | `/synthesize` | `audio/wav`，header 帶 `X-Sample-Rate`、`X-Engine` |
 | POST | `/warmup` | 主動載模型 |
 | GET | `/presets` | **只有 qwen3-tts 有**：`{"speakers": [...], "languages": [...]}` |
@@ -292,7 +318,7 @@ profile, temperature, top_p, top_k, repetition_penalty, seed
 | 引擎 | 變數 |
 |---|---|
 | 共通 | `ENGINE_NAME`、`MODEL_PATH`、`ENGINE_MODES` |
-| cosyvoice ×2 | `COSYVOICE_CLASS`（`CosyVoice2`/`CosyVoice3`）、`COSYVOICE_FP16` |
+| cosyvoice ×2 | `COSYVOICE_CLASS`（`CosyVoice2`/`CosyVoice3`）、`COSYVOICE_FP16`<br>`COSYVOICE_MAX_REF_SEC`（參考音檔硬上限秒數，預設 30，來自上游 `frontend._extract_speech_token` 的 assert）<br>`COSYVOICE3_SYSTEM_PROMPT`（只有 `CosyVoice3` 用得到。CosyVoice3 的 LLM 硬性要求輸入含 `<\|endofprompt\|>`，這是接在它前面那段 system prompt，預設 `You are a helpful assistant.`，跟官方 model card 一致）|
 | qwen3-tts | `QWEN_ATTN`（預設 `sdpa`，aarch64 上唯一免現場編譯的）、`QWEN_DTYPE`、`QWEN_DEFAULT_SPEAKER`（只有 CustomVoice checkpoint 用得到）<br>生成參數：`QWEN_PROFILE`（`fast`/`balanced`/`quality`，預設 `balanced`）、`QWEN_TEMPERATURE`、`QWEN_TOP_P`、`QWEN_TOP_K`、`QWEN_REPETITION_PENALTY`、`QWEN_SPLIT_MAX_CHARS`、`QWEN_RETRIES`、`QWEN_SEED`（後七個不設 = 照 profile 走）<br>效能：`QWEN_MAX_NEW_TOKENS_CAP`（2048）、`QWEN_PROMPT_CACHE_SIZE`（32）、`QWEN_MAX_BATCH`（8）、`QWEN_JOIN_SILENCE_MS`（120）|
 | voxcpm2 | `VOXCPM_OPTIMIZE`（torch.compile，預設關）、`VOXCPM_CFG`、`VOXCPM_TIMESTEPS` |
 
@@ -316,6 +342,7 @@ gateway 端：`ENGINES`（`名稱=網址`，逗號分隔）、`DEFAULT_ENGINE`�
 | `./voice.sh design <名稱> "<描述>"` | `POST /v1/voices/design` |
 | `./voice.sh show <id>` | `GET /v1/voices/{id}` |
 | `./voice.sh transcript <id> "<逐字稿>"` | `PATCH /v1/voices/{id}` |
+| `./voice.sh prepare <id>` | `POST /v1/voices/{id}/prepare` |
 | `./voice.sh preview <id> [文字]` | `POST /v1/voices/{id}/preview` → `work/results/preview.wav` |
 | `./voice.sh rm <id>` | `DELETE /v1/voices/{id}` |
 | `./synth.sh "<文字>" [音色] [輸出檔名]` | `POST /v1/audio/speech` → `work/results/` |

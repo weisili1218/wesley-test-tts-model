@@ -42,6 +42,11 @@ services:
       ENGINES: "fun-cosyvoice3=http://engine:8080"
       DEFAULT_ENGINE: fun-cosyvoice3
       REQUEST_TIMEOUT: "600"
+      # 參考音檔存成 24k，不是預設的 16k。CosyVoice 的 frontend 會拿同一個檔案抽三種
+      # 特徵，其中 flow 的 prompt mel 走 load_wav(wav, 24000) —— 給 16k 不會報錯，
+      # 但會被升採樣，那份 mel 8 kHz 以上是空的，克隆出來的聲音會悶掉。
+      # 另外兩條（speech token / campplus）要 16k，它們自己會降頻，所以存 24k 三條都對。
+      REF_SR: "24000"
       # API_KEY: "sk-xxxx"             # 設了就會檢查 Authorization: Bearer
     depends_on:
       - engine
@@ -71,6 +76,14 @@ services:
       # - "18082:8080"
     environment:
       NVIDIA_VISIBLE_DEVICES: all
+      # autocast(float16)。GB10 是 Blackwell sm_121，同機的 qwen3-tts 用的是 bfloat16，
+      # 但 CosyVoice 這條路徑只有開/關兩種，沒有 bf16 選項。預設開；如果聽到雜訊或
+      # 破音，改成 "0" 再 docker compose up -d engine 就能比對，不用重 build
+      # （server.py 的 get_model() 讀這個值）。
+      COSYVOICE_FP16: "1"
+      # CosyVoice3 的 LLM 要求輸入含 <|endofprompt|>，這是接在它前面的 system prompt，
+      # 預設值跟官方 model card 的範例一致。CosyVoice2 不吃這個。
+      COSYVOICE3_SYSTEM_PROMPT: "You are a helpful assistant."
     volumes:
       # 音色庫。引擎只要讀得到 wav 就好，寫入是 gateway 的事。
       - ./work/voices:/voices:ro

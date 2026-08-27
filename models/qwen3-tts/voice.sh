@@ -6,6 +6,7 @@
 #   ./voice.sh show <voice_id>                      看單一音色
 #   ./voice.sh transcript <voice_id> "<逐字稿>"     事後補逐字稿
 #   ./voice.sh preview <voice_id> [試聽文字]        試聽，存成 work/results/preview.wav
+#   ./voice.sh prepare <voice_id>                   叫引擎把參考特徵先抽好（建音色時已自動做過）
 #   ./voice.sh rm <voice_id>                        刪除
 #
 # 這一包掛的是 Qwen3-TTS-12Hz-1.7B-Base：純克隆，沒有內建音色，所以第一件事一定是
@@ -52,6 +53,15 @@ case "$cmd" in
       -d "$(python3 -c 'import json,sys; print(json.dumps({"transcript":sys.argv[1]}))' "$TEXT")" \
       | pretty
     ;;
+  prepare)
+    # 建立音色時 gateway 已經自動推過一次了。這支是給這幾種情況補打的：
+    # 引擎重啟過（快取在引擎的記憶體裡，重啟就沒了）、建音色時引擎還沒載模型、
+    # 或音色是整個 work/voices/ 從別台機器複製過來的。
+    # load_model=true 會讓引擎為了建快取去載模型（要等 30-90 秒）。
+    ID="${1:?請給 voice_id}"; LOAD="${2:-false}"
+    curl -sS "${AUTH[@]}" -X POST \
+      "$BASE/v1/voices/$ID/prepare?load_model=$LOAD" | pretty
+    ;;
   preview)
     ID="${1:?請給 voice_id}"; TXT="${2:-}"
     Q=$(python3 -c '
@@ -70,7 +80,7 @@ print("?" + urllib.parse.urlencode({"text": sys.argv[1]}) if sys.argv[1] else ""
     curl -sS "${AUTH[@]}" -X DELETE "$BASE/v1/voices/${1:?請給 voice_id}" | pretty
     ;;
   *)
-    sed -n '2,12p' "$0"
+    sed -n '2,13p' "$0"
     exit 1
     ;;
 esac
