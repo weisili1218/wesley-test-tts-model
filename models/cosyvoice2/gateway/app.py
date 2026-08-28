@@ -191,7 +191,13 @@ async def _engine_get(name: str, path: str, timeout: float = 10.0):
         return r.json()
 
 
-async def _engine_synthesize(name: str, payload: dict) -> bytes:
+# 引擎回應裡要原封不動往外傳的診斷欄位。引擎自己還會回 X-Engine / X-Sample-Rate，
+# 那兩個 gateway 自己也有（而且值不同：引擎的是自己的名字），所以不在這裡轉發。
+PASSTHROUGH_HEADERS = ("X-Profile", "X-Segments", "X-Retries")
+
+
+async def _engine_synthesize(name: str, payload: dict) -> tuple[bytes, dict[str, str]]:
+    """回 (音訊, 要往外轉發的診斷 header)。"""
     if name not in ENGINES:
         raise HTTPException(404, f"沒有這顆引擎：{name}。可用的有：{sorted(ENGINES)}")
     url = ENGINES[name] + "/synthesize"
@@ -209,7 +215,10 @@ async def _engine_synthesize(name: str, payload: dict) -> bytes:
         except Exception:
             pass
         raise HTTPException(r.status_code, f"[{name}] {detail}")
-    return r.content
+    # 引擎宣告了斷句幾段、重生幾次、用哪個 profile，不轉發的話從 gateway 這一側
+    # 看不到 —— 產出不對時就少了判斷「是不是引擎自己知道它壞了」的線索。
+    passthrough = {k: r.headers[k] for k in PASSTHROUGH_HEADERS if k in r.headers}
+    return r.content, passthrough
 
 
 async def _engine_voice_op(engine: str, op: str, voice: dict,
@@ -584,9 +593,10 @@ async def preview_voice(voice_id: str, engine: str | None = None, text: str | No
     text = text or "這是音色試聽，用來確認聲音是不是你要的。"
     eng = engine or voice.get("default_engine") or DEFAULT_ENGINE
     payload = _build_payload(voice, eng, text, None, 1.0, None, await _get_caps())
-    wav = await _engine_synthesize(eng, payload)
+    wav, extra = await _engine_synthesize(eng, payload)
     return Response(wav, media_type="audio/wav",
-                    headers={"X-Engine": _hdr(eng), "X-Voice-Id": _hdr(voice["id"])})
+                    headers={"X-Engine": _hdr(eng), "X-Voice-Id": _hdr(voice["id"]),
+                             **extra})
 
 
 # ---------------------------------------------------------------------------
@@ -698,12 +708,12 @@ async def create_speech(body: SpeechRequest):
            ("profile", "temperature", "top_p", "top_k", "repetition_penalty", "seed")}
     payload = _build_payload(voice, engine, body.input, body.instructions,
                              body.speed, body.language, await _get_caps(), gen)
-    wav = await _engine_synthesize(engine, payload)
+    wav, extra = await _engine_synthesize(engine, payload)
     data, mime = _convert_wav(wav, body.response_format)
     return Response(
         data, media_type=mime,
         headers={"X-Engine": _hdr(engine), "X-Voice-Id": _hdr(voice["id"]),
-                 "X-Voice-Type": _hdr(voice["type"])},
+                 "X-Voice-Type": _hdr(voice["type"]), **extra},
     )
 
 
