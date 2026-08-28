@@ -84,6 +84,17 @@ services:
       # CosyVoice3 的 LLM 要求輸入含 <|endofprompt|>，這是接在它前面的 system prompt，
       # 預設值跟官方 model card 的範例一致。CosyVoice2 不吃這個。
       COSYVOICE3_SYSTEM_PROMPT: "You are a helpful assistant."
+      # server.py 的預設 30 秒對這顆 checkpoint 太寬鬆。在 GB10 上實測（同一段音檔
+      # 截成不同長度、固定逐字稿與合成文字），參考音檔越長，LLM 越容易第二步就吐
+      # 停止符，產出退化成 0.04 秒的空音訊：
+      #
+      #     3.5s → 6.40s    6s → 9.28s    8s → 6.08s      （正常）
+      #     9s  → 2.84s    11s → 0.80s   12s → 0.40s      （不穩到壞掉）
+      #    13.1s → 0.04s                                  （必壞）
+      #
+      # 是機率性退化不是硬門檻（11 秒有時仍會生出東西），所以取實測穩定區間的上緣。
+      # 官方 asset/zero_shot_prompt.wav 是 3.48 秒，也落在這個範圍。
+      COSYVOICE_MAX_REF_SEC: "8"
     volumes:
       # 音色庫。引擎只要讀得到 wav 就好，寫入是 gateway 的事。
       - ./work/voices:/voices:ro
